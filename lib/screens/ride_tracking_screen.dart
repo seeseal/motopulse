@@ -692,8 +692,10 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
           // ── Stats panel (bottom portion) ─────────────────────────────
           Container(
             color: const Color(0xFF080808),
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            child: Column(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: Column(
               children: [
                 // Speed + distance + duration row
                 Row(
@@ -1007,9 +1009,10 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                 ),
 
                 // Bottom padding for floating nav
-                const SizedBox(height: 90),
+                const SizedBox(height: 82),
               ],
             ),
+            ), // SingleChildScrollView
           ),
         ],
       ),
