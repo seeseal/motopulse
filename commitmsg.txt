@@ -1,0 +1,1 @@
+fix: update background_service to flutter_foreground_task v8 API  
