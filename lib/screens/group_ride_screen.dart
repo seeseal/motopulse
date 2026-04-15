@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../services/group_ride_service.dart';
 import '../services/route_service.dart';
 
@@ -1054,6 +1055,64 @@ class _JoinSheetState extends State<_JoinSheet> {
               ),
             ),
           ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                  child: Container(
+                      height: 1,
+                      color: Colors.white.withOpacity(0.08))),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: Text('OR',
+                    style: TextStyle(
+                        color: Colors.white24,
+                        fontSize: 11,
+                        letterSpacing: 2)),
+              ),
+              Expanded(
+                  child: Container(
+                      height: 1,
+                      color: Colors.white.withOpacity(0.08))),
+            ],
+          ),
+          const SizedBox(height: 12),
+          GestureDetector(
+            onTap: () async {
+              final code = await Navigator.push<String>(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const _QRScanPage()),
+              );
+              if (code != null && code.length >= 6) {
+                widget.onJoin(code.substring(0, 6).toUpperCase());
+              }
+            },
+            child: Container(
+              width: double.infinity,
+              height: 52,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                    color: Colors.white.withOpacity(0.1)),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.qr_code_scanner_rounded,
+                      color: Colors.white54, size: 20),
+                  SizedBox(width: 10),
+                  Text('SCAN QR CODE',
+                      style: TextStyle(
+                          color: Colors.white54,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 2,
+                          fontSize: 13)),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1164,4 +1223,146 @@ class _ShareSheet extends StatelessWidget {
       ),
     );
   }
+}
+
+// ── QR Scanner Page ───────────────────────────────────────────────────────────
+
+class _QRScanPage extends StatefulWidget {
+  const _QRScanPage();
+
+  @override
+  State<_QRScanPage> createState() => _QRScanPageState();
+}
+
+class _QRScanPageState extends State<_QRScanPage> {
+  final MobileScannerController _controller = MobileScannerController();
+  bool _scanned = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_scanned) return;
+    final barcode = capture.barcodes.firstOrNull;
+    final raw = barcode?.rawValue?.trim().toUpperCase() ?? '';
+    if (raw.isEmpty) return;
+    // Accept any 6-character alphanumeric code — could be raw code or inside a QR
+    final match = RegExp(r'[A-Z0-9]{6}').firstMatch(raw);
+    if (match != null) {
+      _scanned = true;
+      HapticFeedback.mediumImpact();
+      Navigator.pop(context, match.group(0));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: const Text(
+          'Scan Room QR',
+          style: TextStyle(
+              color: Colors.white, fontWeight: FontWeight.w300, letterSpacing: 1),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.flashlight_on_rounded,
+                color: Colors.white54),
+            onPressed: () => _controller.toggleTorch(),
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          MobileScanner(
+            controller: _controller,
+            onDetect: _onDetect,
+          ),
+          // Aim frame overlay
+          Center(
+            child: Container(
+              width: 230,
+              height: 230,
+              decoration: BoxDecoration(
+                border: Border.all(
+                    color: const Color(0xFFE8003D), width: 2.5),
+                borderRadius: BorderRadius.circular(18),
+              ),
+            ),
+          ),
+          // Corner accents
+          Center(
+            child: SizedBox(
+              width: 230,
+              height: 230,
+              child: CustomPaint(painter: _CornerPainter()),
+            ),
+          ),
+          Positioned(
+            bottom: 60,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Text(
+                  'Point at the host\'s QR code',
+                  style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                      letterSpacing: 0.5),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CornerPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    const len = 24.0;
+    const r = 18.0;
+    final p = Paint()
+      ..color = const Color(0xFFE8003D)
+      ..strokeWidth = 4
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    // Top-left
+    canvas.drawLine(Offset(r, 0), Offset(r + len, 0), p);
+    canvas.drawLine(Offset(0, r), Offset(0, r + len), p);
+    // Top-right
+    canvas.drawLine(Offset(size.width - r - len, 0), Offset(size.width - r, 0), p);
+    canvas.drawLine(Offset(size.width, r), Offset(size.width, r + len), p);
+    // Bottom-left
+    canvas.drawLine(Offset(r, size.height), Offset(r + len, size.height), p);
+    canvas.drawLine(Offset(0, size.height - r - len), Offset(0, size.height - r), p);
+    // Bottom-right
+    canvas.drawLine(
+        Offset(size.width - r - len, size.height),
+        Offset(size.width - r, size.height),
+        p);
+    canvas.drawLine(
+        Offset(size.width, size.height - r - len),
+        Offset(size.width, size.height - r),
+        p);
+  }
+
+  @override
+  bool shouldRepaint(_CornerPainter _) => false;
 }

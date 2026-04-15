@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class RiderProfile {
   final String name;
   final int avatarIndex;
+  final String? photoPath; // local file path set by image_picker
   final String bloodType;
   final String allergies;
   final String emergencyName;
@@ -17,6 +18,7 @@ class RiderProfile {
   const RiderProfile({
     required this.name,
     required this.avatarIndex,
+    this.photoPath,
     required this.bloodType,
     required this.allergies,
     required this.emergencyName,
@@ -58,6 +60,7 @@ class ProfileService {
     return RiderProfile(
       name: prefs.getString('rider_name') ?? 'Rider',
       avatarIndex: prefs.getInt('rider_avatar') ?? 0,
+      photoPath: prefs.getString('rider_photo_path'),
       bloodType: prefs.getString('blood_type') ?? '',
       allergies: prefs.getString('allergies') ?? '',
       emergencyName: prefs.getString('emergency_name') ?? '',
@@ -72,6 +75,7 @@ class ProfileService {
   static Future<void> save({
     String? name,
     int? avatarIndex,
+    String? photoPath,
     String? bloodType,
     String? allergies,
     String? emergencyName,
@@ -84,6 +88,7 @@ class ProfileService {
     final prefs = await SharedPreferences.getInstance();
     if (name != null) await prefs.setString('rider_name', name);
     if (avatarIndex != null) await prefs.setInt('rider_avatar', avatarIndex);
+    if (photoPath != null) await prefs.setString('rider_photo_path', photoPath);
     if (bloodType != null) await prefs.setString('blood_type', bloodType);
     if (allergies != null) await prefs.setString('allergies', allergies);
     if (emergencyName != null) await prefs.setString('emergency_name', emergencyName);

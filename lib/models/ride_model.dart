@@ -9,6 +9,8 @@ class RideModel {
   final double maxSpeedKmh;
   final double avgSpeedKmh;
   final DateTime startTime;
+  /// GPS track stored as [[lat, lng], ...] — downsampled to ≤200 points.
+  final List<List<double>> routePoints;
 
   RideModel({
     required this.id,
@@ -18,6 +20,7 @@ class RideModel {
     required this.maxSpeedKmh,
     required this.avgSpeedKmh,
     required this.startTime,
+    this.routePoints = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -28,6 +31,7 @@ class RideModel {
         'maxSpeedKmh': maxSpeedKmh,
         'avgSpeedKmh': avgSpeedKmh,
         'startTime': startTime.toIso8601String(),
+        'routePoints': routePoints,
       };
 
   factory RideModel.fromJson(Map<String, dynamic> json) => RideModel(
@@ -38,6 +42,11 @@ class RideModel {
         maxSpeedKmh: (json['maxSpeedKmh'] as num).toDouble(),
         avgSpeedKmh: (json['avgSpeedKmh'] as num).toDouble(),
         startTime: DateTime.parse(json['startTime']),
+        routePoints: (json['routePoints'] as List<dynamic>? ?? [])
+            .map((p) => (p as List<dynamic>)
+                .map((v) => (v as num).toDouble())
+                .toList())
+            .toList(),
       );
 
   String get formattedDuration {

@@ -7,7 +7,10 @@ import 'package:geolocator/geolocator.dart';
 import '../models/ride_model.dart';
 import '../services/route_service.dart';
 import '../services/profile_service.dart';
+import '../services/weather_service.dart';
+import '../services/background_service.dart';
 import 'group_ride_screen.dart';
+import 'speedometer_screen.dart';
 
 class RideTrackingScreen extends StatefulWidget {
   const RideTrackingScreen({super.key});
@@ -134,6 +137,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       _rideStartTime = DateTime.now();
     });
 
+    // Start foreground service to prevent Android killing GPS in background
+    BackgroundService.startRideService();
+
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _elapsedSeconds++);
     });
@@ -208,9 +214,26 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     setState(() => _isSaving = true);
     _timer?.cancel();
     _positionStream?.cancel();
+    BackgroundService.stopRideService();
 
     final avgSpeed =
         _speedReadings > 0 ? _totalSpeedSum / _speedReadings : 0.0;
+
+    // Downsample route to ≤200 points for compact storage
+    List<List<double>> savedRoute = [];
+    if (_routePoints.isNotEmpty) {
+      final pts = _routePoints;
+      if (pts.length <= 200) {
+        savedRoute = pts.map((p) => [p.latitude, p.longitude]).toList();
+      } else {
+        final step = pts.length / 200.0;
+        for (int i = 0; i < 200; i++) {
+          final idx = (i * step).round().clamp(0, pts.length - 1);
+          savedRoute.add([pts[idx].latitude, pts[idx].longitude]);
+        }
+      }
+    }
+
     final ride = RideModel(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       title: RideModel.generateTitle(_rideStartTime ?? DateTime.now()),
@@ -219,6 +242,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       maxSpeedKmh: double.parse(_maxSpeedKmh.toStringAsFixed(1)),
       avgSpeedKmh: double.parse(avgSpeed.toStringAsFixed(1)),
       startTime: _rideStartTime ?? DateTime.now(),
+      routePoints: savedRoute,
     );
 
     await RideStorage.saveRide(ride);
@@ -234,6 +258,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   void _cancelRide() {
     _timer?.cancel();
     _positionStream?.cancel();
+    BackgroundService.stopRideService();
     setState(() {
       _isRiding = false;
       _speedKmh = 0;
@@ -877,6 +902,57 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
                 const SizedBox(height: 10),
 
+                // Speedometer button
+                GestureDetector(
+                  onTap: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const SpeedometerScreen())),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 13),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111111),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                          color: Colors.white.withOpacity(0.08)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.speed_rounded,
+                              color: Colors.white54, size: 16),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Speedometer',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500)),
+                              Text('Full-screen analogue dial',
+                                  style: TextStyle(
+                                      color: Colors.white30,
+                                      fontSize: 11)),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.arrow_forward_ios_rounded,
+                            color: Colors.white24, size: 14),
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
                 // Start / Stop button
                 GestureDetector(
                   onTap: _isSaving
@@ -985,6 +1061,7 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
   bool _isCalculating = false;
   String? _routeInfo;
   String? _error;
+  String? _destWeather; // e.g. "⛅ 28°C · Good to ride"
 
   @override
   void dispose() {
@@ -1095,6 +1172,15 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
     final timeStr = h > 0 ? '${h}h ${m}m' : '${m}m';
     setState(() =>
         _routeInfo = '${plan.distanceKm.toStringAsFixed(1)} km  ·  $timeStr');
+
+    // Fetch weather at destination in background
+    final dest = validWaypoints.last.position;
+    final weather = await WeatherService.fetchWeather(
+        dest.latitude, dest.longitude);
+    if (mounted && weather != null) {
+      setState(() =>
+          _destWeather = '${weather.emoji} ${weather.tempC.round()}°C · ${weather.ridingCondition}');
+    }
   }
 
   @override
@@ -1276,14 +1362,51 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
                   border: Border.all(
                       color: const Color(0xFF2979FF).withOpacity(0.3)),
                 ),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.route_rounded,
-                        color: Color(0xFF2979FF), size: 16),
-                    const SizedBox(width: 8),
-                    Text(_routeInfo!,
-                        style: const TextStyle(
-                            color: Color(0xFF2979FF), fontSize: 13)),
+                    Row(
+                      children: [
+                        const Icon(Icons.route_rounded,
+                            color: Color(0xFF2979FF), size: 16),
+                        const SizedBox(width: 8),
+                        Text(_routeInfo!,
+                            style: const TextStyle(
+                                color: Color(0xFF2979FF), fontSize: 13)),
+                      ],
+                    ),
+                    if (_destWeather != null) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          const Icon(Icons.location_on_rounded,
+                              color: Colors.white30, size: 14),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Destination: $_destWeather',
+                            style: const TextStyle(
+                                color: Colors.white54, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ] else if (_routeInfo != null) ...[
+                      const SizedBox(height: 6),
+                      const Row(
+                        children: [
+                          SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                                color: Colors.white24),
+                          ),
+                          SizedBox(width: 8),
+                          Text('Fetching destination weather…',
+                              style: TextStyle(
+                                  color: Colors.white24, fontSize: 11)),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

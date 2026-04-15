@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/group_ride_service.dart';
 import '../services/profile_service.dart';
 
@@ -64,6 +66,22 @@ class _SOSScreenState extends State<SOSScreen>
         ).timeout(const Duration(seconds: 6));
       }
     } catch (_) {}
+
+    // Send SMS to emergency contact
+    if (_profile != null && _profile!.emergencyPhone.isNotEmpty) {
+      final phone = _profile!.emergencyPhone.replaceAll(RegExp(r'[^\d+]'), '');
+      final lat = position?.latitude.toStringAsFixed(5) ?? 'unknown';
+      final lng = position?.longitude.toStringAsFixed(5) ?? 'unknown';
+      final msg = Uri.encodeComponent(
+        'EMERGENCY: ${_profile!.name} needs help! '
+        'Location: https://maps.google.com/?q=$lat,$lng '
+        '- Sent via MotoPulse',
+      );
+      final smsUri = Uri.parse('sms:$phone?body=$msg');
+      try {
+        await launchUrl(smsUri);
+      } catch (_) {}
+    }
 
     // Alert group ride if active
     bool groupAlerted = false;
@@ -423,6 +441,22 @@ class _SOSScreenState extends State<SOSScreen>
     );
   }
 
+  Future<void> _callContact(String phone) async {
+    final clean = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    final uri = Uri.parse('tel:$clean');
+    try {
+      await launchUrl(uri);
+    } catch (_) {}
+  }
+
+  Future<void> _smsContact(String phone) async {
+    final clean = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    final uri = Uri.parse('sms:$clean');
+    try {
+      await launchUrl(uri);
+    } catch (_) {}
+  }
+
   Widget _buildContact(String name, String phone) {
     return Row(
       children: [
@@ -439,7 +473,37 @@ class _SOSScreenState extends State<SOSScreen>
             ],
           ),
         ),
-        const Icon(Icons.call_outlined, color: Colors.white24, size: 18),
+        Row(
+          children: [
+            GestureDetector(
+              onTap: () => _smsContact(phone),
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.message_outlined,
+                    color: Colors.white38, size: 16),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => _callContact(phone),
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00C853).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                      color: const Color(0xFF00C853).withOpacity(0.3)),
+                ),
+                child: const Icon(Icons.call_rounded,
+                    color: Color(0xFF00C853), size: 16),
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }

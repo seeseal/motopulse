@@ -33,8 +33,17 @@ dependencies:
   # Storage
   shared_preferences: ^2.2.2
 
-  # Networking (for map tiles)
+  # Networking
   http: ^1.2.0
+
+  # SOS calling & SMS
+  url_launcher: ^6.2.5
+
+  # Profile photo
+  image_picker: ^1.0.7
+
+  # Background GPS foreground service
+  flutter_foreground_task: ^8.0.1
 
 dev_dependencies:
   flutter_test:

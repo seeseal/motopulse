@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../services/profile_service.dart';
 
@@ -18,6 +20,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _emergencyPhoneCtrl = TextEditingController();
 
   int _avatarIndex = 0;
+  String? _photoPath;
   String _bloodType = '';
   double _fuelTankL = 15.0;
   double _fuelEfficiencyKmL = 30.0;
@@ -64,6 +67,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _emergencyNameCtrl.text = profile.emergencyName;
       _emergencyPhoneCtrl.text = profile.emergencyPhone;
       _avatarIndex = profile.avatarIndex;
+      _photoPath = profile.photoPath;
       _bloodType = profile.bloodType.isEmpty ? 'Unknown' : profile.bloodType;
       _fuelTankL = profile.fuelTankL;
       _fuelEfficiencyKmL = profile.fuelEfficiencyKmL;
@@ -72,12 +76,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
     });
   }
 
+  Future<void> _pickPhoto() async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+          source: ImageSource.gallery, imageQuality: 85, maxWidth: 400);
+      if (picked != null && mounted) {
+        setState(() => _photoPath = picked.path);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _save() async {
     HapticFeedback.mediumImpact();
     setState(() => _saving = true);
     await ProfileService.save(
       name: _nameCtrl.text.trim().isEmpty ? 'Rider' : _nameCtrl.text.trim(),
       avatarIndex: _avatarIndex,
+      photoPath: _photoPath,
       bloodType: _bloodType,
       allergies: _allergiesCtrl.text.trim(),
       emergencyName: _emergencyNameCtrl.text.trim(),
@@ -180,33 +196,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
               // ── Avatar ────────────────────────────────────────────────────
               Center(
-                child: Stack(
-                  alignment: Alignment.bottomRight,
-                  children: [
-                    Container(
-                      width: 80,
-                      height: 80,
-                      decoration: BoxDecoration(
-                        color: avatarColor.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: avatarColor, width: 1.5),
+                child: GestureDetector(
+                  onTap: _pickPhoto,
+                  child: Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      Container(
+                        width: 80,
+                        height: 80,
+                        decoration: BoxDecoration(
+                          color: avatarColor.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: avatarColor, width: 1.5),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(22),
+                          child: _photoPath != null &&
+                                  File(_photoPath!).existsSync()
+                              ? Image.file(File(_photoPath!),
+                                  fit: BoxFit.cover,
+                                  width: 80,
+                                  height: 80)
+                              : Center(
+                                  child: Text(avatarEmoji,
+                                      style:
+                                          const TextStyle(fontSize: 36))),
+                        ),
                       ),
-                      child: Center(
-                        child: Text(avatarEmoji,
-                            style: const TextStyle(fontSize: 36)),
+                      Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A1A1A),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: const Icon(Icons.camera_alt_rounded,
+                            color: Colors.white54, size: 14),
                       ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1A1A1A),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white12),
-                      ),
-                      child: const Icon(Icons.edit_rounded,
-                          color: Colors.white54, size: 14),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
