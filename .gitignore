@@ -44,10 +44,11 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Android sensitive
+# Android sensitive & build output
 android/local.properties
 android/.gradle/
 android/key.properties
+android/build/
 
 # iOS
 ios/Flutter/App.framework
