@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/ride_model.dart';
 
 class RideHistoryScreen extends StatefulWidget {
@@ -25,6 +26,44 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
       _rides = rides;
       _loading = false;
     });
+  }
+
+  Future<void> _deleteRide(String id) async {
+    HapticFeedback.mediumImpact();
+    await RideStorage.deleteRide(id);
+    await _load();
+  }
+
+  Future<void> _confirmClearAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF141414),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Clear all rides?',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w400)),
+        content: const Text(
+          'This will permanently delete all saved rides. This cannot be undone.',
+          style: TextStyle(color: Colors.white54, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Colors.white38)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete all',
+                style: TextStyle(color: Color(0xFFE8003D))),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await RideStorage.clearAll();
+      await _load();
+    }
   }
 
   @override
@@ -57,10 +96,13 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
                   ),
                   const Spacer(),
                   if (_rides.isNotEmpty)
-                    Text(
-                      '${_rides.length} rides',
-                      style: const TextStyle(
-                          color: Colors.white24, fontSize: 12),
+                    GestureDetector(
+                      onTap: _confirmClearAll,
+                      child: const Text(
+                        'Clear all',
+                        style: TextStyle(
+                            color: Color(0xFFE8003D), fontSize: 12),
+                      ),
                     ),
                 ],
               ),
@@ -84,8 +126,22 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
                             itemCount: _rides.length,
                             separatorBuilder: (_, __) =>
                                 const SizedBox(height: 10),
-                            itemBuilder: (_, i) =>
-                                _RideCard(ride: _rides[i]),
+                            itemBuilder: (_, i) => Dismissible(
+                              key: Key(_rides[i].id),
+                              direction: DismissDirection.endToStart,
+                              onDismissed: (_) => _deleteRide(_rides[i].id),
+                              background: Container(
+                                alignment: Alignment.centerRight,
+                                padding: const EdgeInsets.only(right: 20),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE8003D).withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: const Icon(Icons.delete_outline,
+                                    color: Color(0xFFE8003D), size: 22),
+                              ),
+                              child: _RideCard(ride: _rides[i]),
+                            ),
                           ),
                         ),
             ),

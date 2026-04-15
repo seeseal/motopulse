@@ -191,8 +191,17 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   }
 
   Future<void> _stopRide() async {
-    if (_elapsedSeconds < 5) {
+    // Discard rides under 5 seconds or under 0.05 km (emulator taps, false starts)
+    if (_elapsedSeconds < 5 || _distanceKm < 0.05) {
       _cancelRide();
+      if (mounted && _distanceKm < 0.05 && _elapsedSeconds >= 5) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Ride too short to save'),
+            backgroundColor: Color(0xFF1A1A1A),
+          ),
+        );
+      }
       return;
     }
 

@@ -91,6 +91,18 @@ class RideStorage {
     await prefs.setString(_key, encoded);
   }
 
+  static Future<void> deleteRide(String id) async {
+    final rides = await loadRides();
+    rides.removeWhere((r) => r.id == id);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key, jsonEncode(rides.map((r) => r.toJson()).toList()));
+  }
+
+  static Future<void> clearAll() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_key);
+  }
+
   static Future<Map<String, dynamic>> getStats() async {
     final rides = await loadRides();
     if (rides.isEmpty) {
