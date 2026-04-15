@@ -15,19 +15,13 @@ class BackgroundService {
         channelDescription: 'Keeps GPS active during your ride',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
-        iconData: const NotificationIconData(
-          resType: ResourceType.mipmap,
-          resPrefix: ResourcePrefix.ic,
-          name: 'launcher',
-        ),
       ),
       iosNotificationOptions: const IOSNotificationOptions(
         showNotification: true,
         playSound: false,
       ),
-      foregroundTaskOptions: const ForegroundTaskOptions(
-        interval: 5000,
-        isOnceEvent: false,
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(5000),
         autoRunOnBoot: false,
         allowWakeLock: true,
         allowWifiLock: true,
@@ -40,8 +34,10 @@ class BackgroundService {
   static Future<void> startRideService() async {
     _ensureInit();
     await FlutterForegroundTask.startService(
+      serviceId: 101,
       notificationTitle: 'MotoPulse – Ride Active',
       notificationText: 'GPS tracking is running',
+      notificationIcon: null,
       callback: _backgroundCallback,
     );
   }
