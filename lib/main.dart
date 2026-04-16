@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'firebase_options.dart';
 import 'screens/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Required for flutter_foreground_task v8 — must be before runApp
+  FlutterForegroundTask.initCommunicationPort();
 
   // Initialize Firebase with explicit options from google-services.json
   try {
@@ -86,7 +90,8 @@ class MotoPulseApp extends StatelessWidget {
           behavior: SnackBarBehavior.floating,
         ),
       ),
-      home: const SplashScreen(),
+      // WithForegroundTask ensures proper lifecycle handling for background GPS
+      home: WithForegroundTask(child: const SplashScreen()),
     );
   }
 }

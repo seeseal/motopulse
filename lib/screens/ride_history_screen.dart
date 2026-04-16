@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../models/ride_model.dart';
 
 class RideHistoryScreen extends StatefulWidget {
@@ -179,9 +181,22 @@ class _RideCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final date = _formatDate(ride.startTime);
+    final hasRoute = ride.routePoints.length >= 2;
+    final routeLatLng = ride.routePoints
+        .map((p) => LatLng(p[0], p[1]))
+        .toList();
+
+    // Compute bounds for auto-centering the mini-map
+    LatLng center = hasRoute
+        ? LatLng(
+            routeLatLng.map((p) => p.latitude).reduce((a, b) => a + b) /
+                routeLatLng.length,
+            routeLatLng.map((p) => p.longitude).reduce((a, b) => a + b) /
+                routeLatLng.length,
+          )
+        : const LatLng(3.1390, 101.6869);
 
     return Container(
-      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: const Color(0xFF111111),
         borderRadius: BorderRadius.circular(16),
@@ -190,74 +205,143 @@ class _RideCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Title + date
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE8003D).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                      color: const Color(0xFFE8003D).withOpacity(0.2)),
-                ),
-                child: const Icon(Icons.motorcycle_rounded,
-                    color: Color(0xFFE8003D), size: 18),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      ride.title,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500),
+          // Mini-map (shown when GPS route exists)
+          if (hasRoute)
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              child: SizedBox(
+                height: 130,
+                child: FlutterMap(
+                  options: MapOptions(
+                    initialCenter: center,
+                    initialZoom: 13,
+                    interactionOptions: const InteractionOptions(
+                      flags: InteractiveFlag.none, // non-interactive
                     ),
-                    const SizedBox(height: 2),
-                    Text(date,
-                        style: const TextStyle(
-                            color: Colors.white38, fontSize: 11)),
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                          'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                      subdomains: const ['a', 'b', 'c', 'd'],
+                      userAgentPackageName: 'com.motopulse.app',
+                    ),
+                    PolylineLayer(
+                      polylines: [
+                        Polyline(
+                          points: routeLatLng,
+                          color: const Color(0xFFE8003D),
+                          strokeWidth: 3,
+                        ),
+                      ],
+                    ),
+                    // Start dot
+                    MarkerLayer(markers: [
+                      Marker(
+                        point: routeLatLng.first,
+                        width: 10,
+                        height: 10,
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                      Marker(
+                        point: routeLatLng.last,
+                        width: 10,
+                        height: 10,
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFE8003D),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                    ]),
                   ],
                 ),
               ),
-              // Distance badge
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE8003D).withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                      color: const Color(0xFFE8003D).withOpacity(0.2)),
-                ),
-                child: Text(
-                  '${ride.distanceKm.toStringAsFixed(1)} km',
-                  style: const TextStyle(
-                      color: Color(0xFFE8003D),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
+            ),
 
-          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Title + date
+                Row(
+                  children: [
+                    if (!hasRoute)
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8003D).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: const Color(0xFFE8003D).withOpacity(0.2)),
+                        ),
+                        child: const Icon(Icons.motorcycle_rounded,
+                            color: Color(0xFFE8003D), size: 16),
+                      ),
+                    if (!hasRoute) const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            ride.title,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(date,
+                              style: const TextStyle(
+                                  color: Colors.white38, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                    // Distance badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE8003D).withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                            color: const Color(0xFFE8003D).withOpacity(0.2)),
+                      ),
+                      child: Text(
+                        '${ride.distanceKm.toStringAsFixed(1)} km',
+                        style: const TextStyle(
+                            color: Color(0xFFE8003D),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
 
-          // Stats grid
-          Row(
-            children: [
-              _statChip(Icons.timer_outlined, ride.formattedDuration),
-              const SizedBox(width: 8),
-              _statChip(Icons.speed_rounded,
-                  '${ride.avgSpeedKmh.toStringAsFixed(0)} avg'),
-              const SizedBox(width: 8),
-              _statChip(Icons.arrow_upward_rounded,
-                  '${ride.maxSpeedKmh.toStringAsFixed(0)} max'),
-            ],
+                const SizedBox(height: 12),
+
+                // Stats row
+                Row(
+                  children: [
+                    _statChip(Icons.timer_outlined, ride.formattedDuration),
+                    const SizedBox(width: 8),
+                    _statChip(Icons.speed_rounded,
+                        '${ride.avgSpeedKmh.toStringAsFixed(0)} avg'),
+                    const SizedBox(width: 8),
+                    _statChip(Icons.arrow_upward_rounded,
+                        '${ride.maxSpeedKmh.toStringAsFixed(0)} max'),
+                  ],
+                ),
+              ],
+            ),
           ),
         ],
       ),

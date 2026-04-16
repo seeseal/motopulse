@@ -8,9 +8,10 @@ import '../models/ride_model.dart';
 import '../services/route_service.dart';
 import '../services/profile_service.dart';
 import '../services/weather_service.dart';
-import '../services/background_service.dart';
+import '../services/ride_service.dart';
 import 'group_ride_screen.dart';
 import 'speedometer_screen.dart';
+// ignore_for_file: unused_import
 
 class RideTrackingScreen extends StatefulWidget {
   const RideTrackingScreen({super.key});
@@ -21,28 +22,10 @@ class RideTrackingScreen extends StatefulWidget {
 
 class _RideTrackingScreenState extends State<RideTrackingScreen>
     with SingleTickerProviderStateMixin {
-  bool _isRiding = false;
-  bool _isSaving = false;
-
-  // Live stats
-  double _speedKmh = 0;
-  double _distanceKm = 0;
-  double _maxSpeedKmh = 0;
-  double _totalSpeedSum = 0;
-  int _speedReadings = 0;
-  int _elapsedSeconds = 0;
-
-  // GPS & Map
-  StreamSubscription<Position>? _positionStream;
-  Position? _lastPosition;
-  DateTime? _rideStartTime;
+  // Map & location state (stays in widget)
   LatLng _currentLatLng = const LatLng(3.1390, 101.6869); // default: KL
-  List<LatLng> _routePoints = [];
   bool _locationReady = false;
   final MapController _mapController = MapController();
-
-  // Timer
-  Timer? _timer;
 
   // Profile-driven settings
   double _speedLimitKmh = 100.0;
@@ -54,6 +37,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   // Pulse animation
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
+
+  // RideService listener
+  StreamSubscription<void>? _rideServiceSub;
 
   @override
   void initState() {
@@ -73,6 +59,30 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         _fuelEfficiencyKmL = p.fuelEfficiencyKmL;
       });
     });
+    // Subscribe to RideService — rebuilds UI when service emits
+    _rideServiceSub = RideService.onChange.listen((_) {
+      if (!mounted) return;
+      // Sync map to latest GPS point
+      final pts = RideService.routePoints;
+      if (pts.isNotEmpty) {
+        final ll = pts.last;
+        _currentLatLng = ll;
+        if (RideService.isRiding) {
+          try {
+            _mapController.move(ll, _mapController.camera.zoom);
+          } catch (_) {}
+        }
+      }
+      // Speed alert
+      final overLimit = RideService.speedKmh > _speedLimitKmh;
+      if (overLimit && !_speedAlertShownOnce) {
+        HapticFeedback.heavyImpact();
+        _speedAlertShownOnce = true;
+      }
+      if (!overLimit) _speedAlertShownOnce = false;
+      _speedAlertActive = overLimit;
+      setState(() {});
+    });
     // Delay init until after first frame so MapController is ready
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _initLocation();
@@ -82,8 +92,8 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   @override
   void dispose() {
     _pulseController.dispose();
-    _positionStream?.cancel();
-    _timer?.cancel();
+    _rideServiceSub?.cancel();
+    // NOTE: do NOT cancel RideService GPS here — it must survive widget disposal
     _mapController.dispose();
     super.dispose();
   }
@@ -123,149 +133,27 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       _showSnack('Please enable location services.');
       return;
     }
-
-    setState(() {
-      _isRiding = true;
-      _speedKmh = 0;
-      _distanceKm = 0;
-      _maxSpeedKmh = 0;
-      _totalSpeedSum = 0;
-      _speedReadings = 0;
-      _elapsedSeconds = 0;
-      _lastPosition = null;
-      _routePoints = _locationReady ? [_currentLatLng] : [];
-      _rideStartTime = DateTime.now();
-    });
-
-    // Start foreground service to prevent Android killing GPS in background
-    BackgroundService.startRideService();
-
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _elapsedSeconds++);
-    });
-
-    _positionStream = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 5,
-      ),
-    ).listen((Position pos) {
-      if (!mounted) return;
-
-      final speedMs = pos.speed < 0 ? 0.0 : pos.speed;
-      final speedKmh = speedMs * 3.6;
-      final ll = LatLng(pos.latitude, pos.longitude);
-
-      double added = 0;
-      if (_lastPosition != null) {
-        added = Geolocator.distanceBetween(
-              _lastPosition!.latitude,
-              _lastPosition!.longitude,
-              pos.latitude,
-              pos.longitude,
-            ) /
-            1000;
-        if (added < 0.5) _distanceKm += added;
-      }
-
-      if (speedKmh > 0) {
-        _totalSpeedSum += speedKmh;
-        _speedReadings++;
-      }
-      if (speedKmh > _maxSpeedKmh) _maxSpeedKmh = speedKmh;
-
-      // Speed alert
-      final overLimit = speedKmh > _speedLimitKmh;
-      if (overLimit && !_speedAlertShownOnce) {
-        HapticFeedback.heavyImpact();
-        _speedAlertShownOnce = true;
-      }
-      if (!overLimit) _speedAlertShownOnce = false;
-
-      setState(() {
-        _speedKmh = speedKmh;
-        _speedAlertActive = overLimit;
-        _currentLatLng = ll;
-        _routePoints.add(ll);
-        if (_routePoints.length > 1000) _routePoints.removeAt(0);
-        _lastPosition = pos;
-      });
-
-      // Keep map centred while riding
-      _mapController.move(ll, _mapController.camera.zoom);
-    });
+    RideService.startRide(
+        initialPos: _locationReady ? _currentLatLng : null);
   }
 
   Future<void> _stopRide() async {
-    // Discard rides under 5 seconds or under 0.05 km (emulator taps, false starts)
-    if (_elapsedSeconds < 5 || _distanceKm < 0.05) {
-      _cancelRide();
-      if (mounted && _distanceKm < 0.05 && _elapsedSeconds >= 5) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Ride too short to save'),
-            backgroundColor: Color(0xFF1A1A1A),
-          ),
-        );
-      }
-      return;
+    final ride = await RideService.stopRide();
+    if (!mounted) return;
+    if (ride == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Ride too short to save'),
+          backgroundColor: Color(0xFF1A1A1A),
+        ),
+      );
+    } else {
+      _showRideSummary(ride);
     }
-
-    setState(() => _isSaving = true);
-    _timer?.cancel();
-    _positionStream?.cancel();
-    BackgroundService.stopRideService();
-
-    final avgSpeed =
-        _speedReadings > 0 ? _totalSpeedSum / _speedReadings : 0.0;
-
-    // Downsample route to ≤200 points for compact storage
-    List<List<double>> savedRoute = [];
-    if (_routePoints.isNotEmpty) {
-      final pts = _routePoints;
-      if (pts.length <= 200) {
-        savedRoute = pts.map((p) => [p.latitude, p.longitude]).toList();
-      } else {
-        final step = pts.length / 200.0;
-        for (int i = 0; i < 200; i++) {
-          final idx = (i * step).round().clamp(0, pts.length - 1);
-          savedRoute.add([pts[idx].latitude, pts[idx].longitude]);
-        }
-      }
-    }
-
-    final ride = RideModel(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      title: RideModel.generateTitle(_rideStartTime ?? DateTime.now()),
-      distanceKm: double.parse(_distanceKm.toStringAsFixed(2)),
-      durationSeconds: _elapsedSeconds,
-      maxSpeedKmh: double.parse(_maxSpeedKmh.toStringAsFixed(1)),
-      avgSpeedKmh: double.parse(avgSpeed.toStringAsFixed(1)),
-      startTime: _rideStartTime ?? DateTime.now(),
-      routePoints: savedRoute,
-    );
-
-    await RideStorage.saveRide(ride);
-    setState(() {
-      _isRiding = false;
-      _isSaving = false;
-      _speedKmh = 0;
-    });
-
-    if (mounted) _showRideSummary(ride);
   }
 
   void _cancelRide() {
-    _timer?.cancel();
-    _positionStream?.cancel();
-    BackgroundService.stopRideService();
-    setState(() {
-      _isRiding = false;
-      _speedKmh = 0;
-      _distanceKm = 0;
-      _elapsedSeconds = 0;
-      _routePoints = [];
-    });
+    RideService.cancelRide();
   }
 
   void _showSnack(String msg) {
@@ -375,12 +263,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     );
   }
 
-  String get _formattedTime {
-    final h = _elapsedSeconds ~/ 3600;
-    final m = (_elapsedSeconds % 3600) ~/ 60;
-    final s = _elapsedSeconds % 60;
-    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-  }
+  // Formatted time now provided by RideService.formattedTime
 
   @override
   Widget build(BuildContext context) {
@@ -472,11 +355,11 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                       ),
 
                     // Ridden route (red)
-                    if (_routePoints.length > 1)
+                    if (RideService.routePoints.length > 1)
                       PolylineLayer(
                         polylines: [
                           Polyline(
-                            points: _routePoints,
+                            points: RideService.routePoints,
                             color: const Color(0xFFE8003D),
                             strokeWidth: 4,
                             borderColor:
@@ -495,7 +378,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                           child: AnimatedBuilder(
                             animation: _pulseAnim,
                             builder: (_, __) => Transform.scale(
-                              scale: _isRiding ? _pulseAnim.value : 1.0,
+                              scale: RideService.isRiding ? _pulseAnim.value : 1.0,
                               child: Container(
                                 width: 44,
                                 height: 44,
@@ -598,7 +481,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                             color: const Color(0xFF111111).withOpacity(0.9),
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(
-                              color: _isRiding
+                              color: RideService.isRiding
                                   ? Colors.green.withOpacity(0.5)
                                   : Colors.white12,
                             ),
@@ -610,16 +493,16 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                                 height: 6,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: _isRiding
+                                  color: RideService.isRiding
                                       ? Colors.green
                                       : Colors.white24,
                                 ),
                               ),
                               const SizedBox(width: 6),
                               Text(
-                                _isRiding ? 'LIVE' : 'IDLE',
+                                RideService.isRiding ? 'LIVE' : 'IDLE',
                                 style: TextStyle(
-                                  color: _isRiding
+                                  color: RideService.isRiding
                                       ? Colors.green
                                       : Colors.white30,
                                   fontSize: 10,
@@ -671,7 +554,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                       color: Colors.white, size: 18),
                   const SizedBox(width: 10),
                   Text(
-                    'SPEED ALERT  ·  ${_speedKmh.toStringAsFixed(0)} km/h',
+                    'SPEED ALERT  ·  ${RideService.speedKmh.toStringAsFixed(0)} km/h',
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,
@@ -723,7 +606,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
                                 Text(
-                                  _speedKmh.toStringAsFixed(0),
+                                  RideService.speedKmh.toStringAsFixed(0),
                                   style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 40,
@@ -750,9 +633,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                       child: Column(
                         children: [
                           _statTile('DISTANCE',
-                              '${_distanceKm.toStringAsFixed(2)} km'),
+                              '${RideService.distanceKm.toStringAsFixed(2)} km'),
                           const SizedBox(height: 10),
-                          _statTile('DURATION', _formattedTime),
+                          _statTile('DURATION', RideService.formattedTime),
                         ],
                       ),
                     ),
@@ -762,7 +645,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                 const SizedBox(height: 10),
 
                 // Max speed row (only when riding)
-                if (_isRiding)
+                if (RideService.isRiding)
                   Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 16, vertical: 12),
@@ -780,7 +663,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                                 color: Colors.white38, fontSize: 13)),
                         const Spacer(),
                         Text(
-                          '${_maxSpeedKmh.toStringAsFixed(0)} km/h',
+                          '${RideService.maxSpeedKmh.toStringAsFixed(0)} km/h',
                           style: const TextStyle(
                               color: Colors.white,
                               fontSize: 14,
@@ -791,11 +674,11 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                   ),
 
                 // Fuel range estimate (while riding)
-                if (_isRiding && _fuelEfficiencyKmL > 0) ...[
+                if (RideService.isRiding && _fuelEfficiencyKmL > 0) ...[
                   const SizedBox(height: 10),
                   Builder(builder: (_) {
                     final fuelPct = _fuelTankL > 0 && _fuelEfficiencyKmL > 0
-                        ? (((_fuelTankL - _distanceKm / _fuelEfficiencyKmL) /
+                        ? (((_fuelTankL - RideService.distanceKm / _fuelEfficiencyKmL) /
                                 _fuelTankL)
                             .clamp(0.0, 1.0))
                         : 1.0;
@@ -849,7 +732,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                 ],
 
                 // Group ride button (only when not riding)
-                if (!_isRiding)
+                if (!RideService.isRiding)
                   GestureDetector(
                     onTap: () => Navigator.push(
                       context,
@@ -957,54 +840,121 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
                 // Start / Stop button
                 GestureDetector(
-                  onTap: _isSaving
+                  onTap: RideService.isSaving
                       ? null
-                      : (_isRiding ? _stopRide : _startRide),
+                      : (RideService.isRiding ? _stopRide : _startRide),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
                     width: double.infinity,
-                    height: 54,
+                    height: RideService.isRiding ? 68 : 54,
                     decoration: BoxDecoration(
-                      color: _isSaving
+                      color: RideService.isSaving
                           ? const Color(0xFF1A1A1A)
-                          : (_isRiding
-                              ? const Color(0xFF1A1A1A)
+                          : (RideService.isRiding
+                              ? const Color(0xFF0D0D0D)
                               : const Color(0xFFE8003D)),
                       borderRadius: BorderRadius.circular(14),
-                      border: _isRiding
-                          ? Border.all(color: Colors.white12)
+                      border: RideService.isRiding
+                          ? Border.all(
+                              color: const Color(0xFFE8003D).withOpacity(0.5),
+                              width: 1.5)
                           : null,
-                      boxShadow: !_isRiding && !_isSaving
+                      boxShadow: RideService.isRiding
                           ? [
                               BoxShadow(
-                                color:
-                                    const Color(0xFFE8003D).withOpacity(0.3),
-                                blurRadius: 16,
-                                offset: const Offset(0, 6),
+                                color: const Color(0xFFE8003D).withOpacity(0.15),
+                                blurRadius: 12,
+                                spreadRadius: 1,
                               )
                             ]
-                          : null,
+                          : (!RideService.isSaving
+                              ? [
+                                  BoxShadow(
+                                    color: const Color(0xFFE8003D)
+                                        .withOpacity(0.35),
+                                    blurRadius: 16,
+                                    offset: const Offset(0, 6),
+                                  )
+                                ]
+                              : null),
                     ),
-                    child: Center(
-                      child: _isSaving
-                          ? const SizedBox(
+                    child: RideService.isSaving
+                        ? const Center(
+                            child: SizedBox(
                               width: 20,
                               height: 20,
                               child: CircularProgressIndicator(
-                                  strokeWidth: 1.5,
-                                  color: Colors.white54))
-                          : Text(
-                              _isRiding ? 'STOP RIDE' : 'START RIDE',
-                              style: TextStyle(
-                                color: _isRiding
-                                    ? Colors.white38
-                                    : Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 3,
-                              ),
+                                  strokeWidth: 1.5, color: Colors.white38),
                             ),
-                    ),
+                          )
+                        : RideService.isRiding
+                            ? Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.center,
+                                    children: [
+                                      Container(
+                                        width: 7,
+                                        height: 7,
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFFE8003D),
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        RideService.formattedTime,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w200,
+                                          letterSpacing: 2,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      Text(
+                                        '${RideService.distanceKm.toStringAsFixed(2)} km',
+                                        style: const TextStyle(
+                                          color: Colors.white38,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w400,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  const Text(
+                                    'TAP TO STOP',
+                                    style: TextStyle(
+                                      color: Color(0xFFE8003D),
+                                      fontSize: 9,
+                                      letterSpacing: 3,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : const Center(
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      'START RIDE',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 3,
+                                      ),
+                                    ),
+                                    SizedBox(width: 10),
+                                    Icon(Icons.arrow_forward_rounded,
+                                        color: Colors.white, size: 16),
+                                  ],
+                                ),
+                              ),
                   ),
                 ),
 
