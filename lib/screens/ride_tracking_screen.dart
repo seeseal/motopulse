@@ -9,6 +9,8 @@ import '../services/route_service.dart';
 import '../services/profile_service.dart';
 import '../services/weather_service.dart';
 import '../services/ride_service.dart';
+import '../services/crash_detector.dart';
+import '../widgets/crash_alert_overlay.dart';
 import 'group_ride_screen.dart';
 import 'speedometer_screen.dart';
 // ignore_for_file: unused_import
@@ -40,6 +42,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
   // RideService listener
   StreamSubscription<void>? _rideServiceSub;
+  StreamSubscription<void>? _crashSub;
 
   @override
   void initState() {
@@ -59,6 +62,19 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         _fuelEfficiencyKmL = p.fuelEfficiencyKmL;
       });
     });
+    // Subscribe to crash detector — show alert overlay when impact detected
+    _crashSub = CrashDetector.onCrashDetected.listen((_) {
+      if (!mounted) return;
+      Navigator.of(context).push(PageRouteBuilder(
+        opaque: false,
+        barrierDismissible: false,
+        pageBuilder: (_, __, ___) => const CrashAlertOverlay(),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+        transitionDuration: const Duration(milliseconds: 400),
+      ));
+    });
+
     // Subscribe to RideService — rebuilds UI when service emits
     _rideServiceSub = RideService.onChange.listen((_) {
       if (!mounted) return;
@@ -93,6 +109,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   void dispose() {
     _pulseController.dispose();
     _rideServiceSub?.cancel();
+    _crashSub?.cancel();
     // NOTE: do NOT cancel RideService GPS here — it must survive widget disposal
     _mapController.dispose();
     super.dispose();

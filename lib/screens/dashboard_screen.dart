@@ -3,7 +3,10 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/ride_model.dart';
 import '../services/weather_service.dart';
+import '../services/maintenance_service.dart';
+import '../models/maintenance_model.dart';
 import 'ride_history_screen.dart';
+import 'maintenance_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   final VoidCallback? onStartRide;
@@ -24,6 +27,8 @@ class _DashboardScreenState extends State<DashboardScreen>
   int _totalRides = 0;
   bool _isLoading = true;
   WeatherData? _weather;
+  int _overdueCount = 0;
+  int _dueSoonCount = 0;
 
   late AnimationController _fadeController;
   late Animation<double> _fadeAnim;
@@ -73,8 +78,20 @@ class _DashboardScreenState extends State<DashboardScreen>
       });
     }
 
-    // Fetch weather in the background
+    // Fetch weather & maintenance in background
     _fetchWeather();
+    _fetchMaintenance();
+  }
+
+  Future<void> _fetchMaintenance() async {
+    await MaintenanceService.seedDefaults();
+    final items = await MaintenanceService.loadItems();
+    final odo   = await MaintenanceService.totalOdometerKm();
+    if (!mounted) return;
+    setState(() {
+      _overdueCount  = items.where((i) => i.isOverdue(odo)).length;
+      _dueSoonCount  = items.where((i) => !i.isOverdue(odo) && i.duePct(odo) >= 0.8).length;
+    });
   }
 
   Future<void> _fetchWeather() async {
@@ -258,6 +275,84 @@ class _DashboardScreenState extends State<DashboardScreen>
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: _buildWeatherCard(),
+                  ),
+                ),
+
+                const SliverToBoxAdapter(child: SizedBox(height: 16)),
+
+                // Maintenance Card
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: GestureDetector(
+                      onTap: () => Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const MaintenanceScreen()))
+                          .then((_) => _fetchMaintenance()),
+                      child: Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF111111),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: _overdueCount > 0
+                                ? const Color(0xFFE8003D).withOpacity(0.35)
+                                : Colors.white.withOpacity(0.06),
+                          ),
+                        ),
+                        child: Row(children: [
+                          Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: (_overdueCount > 0
+                                  ? const Color(0xFFE8003D)
+                                  : _dueSoonCount > 0
+                                      ? const Color(0xFFFFD700)
+                                      : const Color(0xFF00C853))
+                                  .withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(Icons.build_rounded,
+                                color: _overdueCount > 0
+                                    ? const Color(0xFFE8003D)
+                                    : _dueSoonCount > 0
+                                        ? const Color(0xFFFFD700)
+                                        : const Color(0xFF00C853),
+                                size: 18),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Maintenance',
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500)),
+                                const SizedBox(height: 3),
+                                Text(
+                                  _overdueCount > 0
+                                      ? '$_overdueCount item${_overdueCount > 1 ? 's' : ''} overdue'
+                                      : _dueSoonCount > 0
+                                          ? '$_dueSoonCount item${_dueSoonCount > 1 ? 's' : ''} due soon'
+                                          : 'All services up to date',
+                                  style: TextStyle(
+                                      color: _overdueCount > 0
+                                          ? const Color(0xFFE8003D)
+                                          : _dueSoonCount > 0
+                                              ? const Color(0xFFFFD700)
+                                              : Colors.white38,
+                                      fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.arrow_forward_ios_rounded,
+                              color: Colors.white24, size: 14),
+                        ]),
+                      ),
+                    ),
                   ),
                 ),
 

@@ -3,6 +3,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/ride_model.dart';
 import 'background_service.dart';
+import 'crash_detector.dart';
 
 /// Singleton that owns the GPS subscription and ride timer.
 /// Lives outside the widget tree so the ride survives app-switching,
@@ -50,6 +51,7 @@ class RideService {
     BackgroundService.startRideService();
     _startGPS();
     _startTimer();
+    CrashDetector.startMonitoring();
     _notify();
   }
 
@@ -62,6 +64,7 @@ class RideService {
     _gpsSub = null;
     _timer?.cancel();
     _timer = null;
+    CrashDetector.stopMonitoring();
     BackgroundService.stopRideService();
 
     // Discard ghost / test rides
@@ -108,6 +111,7 @@ class RideService {
     _gpsSub = null;
     _timer?.cancel();
     _timer = null;
+    CrashDetector.stopMonitoring();
     BackgroundService.stopRideService();
     _reset();
   }

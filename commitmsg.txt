@@ -1,1 +1,1 @@
-fix: resolve 1.3px bottom overflow in stats panel during active ride  
+fix: background GPS via RideService singleton, live ride button, history mini-maps, new icon  

@@ -45,6 +45,9 @@ dependencies:
   # Background GPS foreground service
   flutter_foreground_task: ^8.0.1
 
+  # Crash detection (accelerometer / gyroscope)
+  sensors_plus: ^4.0.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
