@@ -49,7 +49,7 @@ class MaintenanceService {
 
   static Future<double> totalOdometerKm() async {
     final rides = await RideStorage.loadRides();
-    return rides.fold(0.0, (sum, r) => sum + r.distanceKm);
+    return rides.fold<double>(0.0, (sum, r) => sum + r.distanceKm);
   }
 
   // ── Defaults ───────────────────────────────────────────────────────────────
