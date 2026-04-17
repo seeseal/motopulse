@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -11,6 +12,7 @@ import '../services/weather_service.dart';
 import '../services/ride_service.dart';
 import '../services/crash_detector.dart';
 import '../widgets/crash_alert_overlay.dart';
+import '../widgets/glass_card.dart';
 import 'group_ride_screen.dart';
 import 'speedometer_screen.dart';
 // ignore_for_file: unused_import
@@ -285,8 +287,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF080808),
-      body: Column(
+      backgroundColor: Colors.transparent,
+      body: GradientBackground(
+       child: Column(
         children: [
           // ── Map (top portion) ─────────────────────────────────────────
           Expanded(
@@ -590,8 +593,11 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
             ),
 
           // ── Stats panel (bottom portion) ─────────────────────────────
-          Container(
-            color: const Color(0xFF080808),
+          ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+              child: Container(
+            color: Colors.black.withOpacity(0.55),
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: SingleChildScrollView(
               physics: const NeverScrollableScrollPhysics(),
@@ -603,13 +609,10 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                     // Speed — big
                     Expanded(
                       flex: 2,
-                      child: Container(
+                      child: GlassCard(
                         padding: const EdgeInsets.symmetric(
                             vertical: 16, horizontal: 16),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF111111),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
+                        borderRadius: BorderRadius.circular(16),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -663,13 +666,10 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
                 // Max speed row (only when riding)
                 if (RideService.isRiding)
-                  Container(
+                  GlassCard(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF111111),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
+                    borderRadius: BorderRadius.circular(14),
                     child: Row(
                       children: [
                         const Icon(Icons.speed_rounded,
@@ -980,33 +980,35 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
               ],
             ),
             ), // SingleChildScrollView
-          ),
+          ),      // Container
+            ),    // BackdropFilter
+          ),      // ClipRect
         ],
-      ),
+       ), // Column
+      ), // GradientBackground
     );
   }
 
   Widget _statTile(String label, String value) {
-    return Container(
-      width: double.infinity,
+    return GlassCard(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF111111),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(
-                  color: Colors.white24, fontSize: 9, letterSpacing: 2)),
-          const SizedBox(height: 2),
-          Text(value,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w300)),
-        ],
+      borderRadius: BorderRadius.circular(14),
+      child: SizedBox(
+        width: double.infinity,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: const TextStyle(
+                    color: Colors.white24, fontSize: 9, letterSpacing: 2)),
+            const SizedBox(height: 2),
+            Text(value,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w300)),
+          ],
+        ),
       ),
     );
   }
