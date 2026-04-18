@@ -25,10 +25,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        // Only include ARM ABIs for release; emulator (x86_64) uses debug builds
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
+        // NOTE: No abiFilters here — applied per build type below
     }
 
     packaging {
@@ -41,12 +38,16 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+            // Release: ARM only — strips x86_64 (emulator-only, causes 16KB warning)
+            ndk {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            }
         }
+        // debug: no abiFilters — allows x86_64 so the emulator works
     }
 }
 
-// Exclude x86_64 JNI libs ONLY in release builds.
-// Debug builds keep x86_64 so the emulator can run the app.
+// Also exclude x86_64 JNI libs from AARs in release only (ML Kit / Firebase bypass abiFilters)
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         variant.packaging.jniLibs.excludes.add("lib/x86_64/**")
