@@ -232,24 +232,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                                     letterSpacing: 0.3)),
                           ]),
                         ),
-                        if (_weather != null) ...[
-                          const SizedBox(width: 8),
-                          GlassCard(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 5),
-                            borderRadius: BorderRadius.circular(20),
-                            child: Row(children: [
-                              Text(_weather!.emoji,
-                                  style: const TextStyle(fontSize: 13)),
-                              const SizedBox(width: 5),
-                              Text(
-                                '${_weather!.tempC.toStringAsFixed(0)}°  ${_weather!.badge}',
-                                style: const TextStyle(
-                                    color: Colors.white70, fontSize: 11),
-                              ),
-                            ]),
-                          ),
-                        ],
                       ]),
                     ),
                   ),
