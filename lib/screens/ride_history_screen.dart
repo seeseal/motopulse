@@ -1,8 +1,59 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import '../models/ride_model.dart';
+
+// ── Dark map style (shared with other map screens) ────────────────────────────
+
+const _kDarkMapStyle = '''[
+  {"elementType":"geometry","stylers":[{"color":"#0a0a0a"}]},
+  {"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+  {"elementType":"labels.text.stroke","stylers":[{"color":"#0a0a0a"}]},
+  {"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#1a1a1a"}]},
+  {"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},
+  {"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},
+  {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+  {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#111111"}]},
+  {"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
+  {"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#0a0a0a"}]},
+  {"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#1e1e1e"}]},
+  {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},
+  {"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#212121"}]},
+  {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#2a2a2a"}]},
+  {"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#2d2d2d"}]},
+  {"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
+  {"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#050505"}]},
+  {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}
+]''';
+
+// ── Zoom helper ───────────────────────────────────────────────────────────────
+
+double _zoomForPoints(List<gmaps.LatLng> points) {
+  if (points.length < 2) return 14;
+  double minLat = points.first.latitude;
+  double maxLat = points.first.latitude;
+  double minLng = points.first.longitude;
+  double maxLng = points.first.longitude;
+  for (final p in points) {
+    minLat = math.min(minLat, p.latitude);
+    maxLat = math.max(maxLat, p.latitude);
+    minLng = math.min(minLng, p.longitude);
+    maxLng = math.max(maxLng, p.longitude);
+  }
+  final span = math.max(maxLat - minLat, maxLng - minLng);
+  if (span < 0.002) return 16;
+  if (span < 0.008) return 15;
+  if (span < 0.02)  return 14;
+  if (span < 0.06)  return 13;
+  if (span < 0.15)  return 12;
+  if (span < 0.5)   return 11;
+  if (span < 1.5)   return 10;
+  return 9;
+}
+
+// ── Screen ────────────────────────────────────────────────────────────────────
 
 class RideHistoryScreen extends StatefulWidget {
   const RideHistoryScreen({super.key});
@@ -24,10 +75,12 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     final rides = await RideStorage.loadRides();
-    if (mounted) setState(() {
-      _rides = rides;
-      _loading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _rides = rides;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _deleteRide(String id) async {
@@ -102,8 +155,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
                       onTap: _confirmClearAll,
                       child: const Text(
                         'Clear all',
-                        style: TextStyle(
-                            color: Color(0xFFE8003D), fontSize: 12),
+                        style: TextStyle(color: Color(0xFFE8003D), fontSize: 12),
                       ),
                     ),
                 ],
@@ -157,14 +209,13 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.motorcycle_rounded,
-              color: Colors.white12, size: 56),
-          const SizedBox(height: 16),
-          const Text('No rides yet',
+        children: const [
+          Icon(Icons.motorcycle_rounded, color: Colors.white12, size: 56),
+          SizedBox(height: 16),
+          Text('No rides yet',
               style: TextStyle(color: Colors.white38, fontSize: 16)),
-          const SizedBox(height: 8),
-          const Text(
+          SizedBox(height: 8),
+          Text(
             'Start a ride to build your history',
             style: TextStyle(color: Colors.white24, fontSize: 13),
           ),
@@ -174,6 +225,8 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
   }
 }
 
+// ── Ride Card ─────────────────────────────────────────────────────────────────
+
 class _RideCard extends StatelessWidget {
   final RideModel ride;
   const _RideCard({required this.ride});
@@ -182,19 +235,23 @@ class _RideCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final date = _formatDate(ride.startTime);
     final hasRoute = ride.routePoints.length >= 2;
-    final routeLatLng = ride.routePoints
-        .map((p) => LatLng(p[0], p[1]))
+
+    // Convert stored [lat, lng] pairs → gmaps.LatLng for the mini-map
+    final gmPoints = ride.routePoints
+        .map((p) => gmaps.LatLng(p[0], p[1]))
         .toList();
 
-    // Compute bounds for auto-centering the mini-map
-    LatLng center = hasRoute
-        ? LatLng(
-            routeLatLng.map((p) => p.latitude).reduce((a, b) => a + b) /
-                routeLatLng.length,
-            routeLatLng.map((p) => p.longitude).reduce((a, b) => a + b) /
-                routeLatLng.length,
+    // Centre of the route for the initial camera position
+    final center = hasRoute
+        ? gmaps.LatLng(
+            gmPoints.map((p) => p.latitude).reduce((a, b) => a + b) /
+                gmPoints.length,
+            gmPoints.map((p) => p.longitude).reduce((a, b) => a + b) /
+                gmPoints.length,
           )
-        : const LatLng(3.1390, 101.6869);
+        : const gmaps.LatLng(3.1390, 101.6869); // fallback: KL
+
+    final zoom = hasRoute ? _zoomForPoints(gmPoints) : 14.0;
 
     return Container(
       decoration: BoxDecoration(
@@ -205,75 +262,71 @@ class _RideCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Mini-map (shown when GPS route exists)
+          // ── Mini-map (Google Maps lite mode) ──────────────────────────────
           if (hasRoute)
             ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
               child: SizedBox(
                 height: 130,
-                child: FlutterMap(
-                  options: MapOptions(
-                    initialCenter: center,
-                    initialZoom: 13,
-                    interactionOptions: const InteractionOptions(
-                      flags: InteractiveFlag.none, // non-interactive
-                    ),
+                child: gmaps.GoogleMap(
+                  key: Key('minimap_${ride.id}'),
+                  liteModeEnabled: true,
+                  initialCameraPosition: gmaps.CameraPosition(
+                    target: center,
+                    zoom: zoom,
                   ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-                      subdomains: const ['a', 'b', 'c', 'd'],
-                      userAgentPackageName: 'com.motopulse.app',
+                  onMapCreated: (controller) {
+                    // Apply dark style; fire-and-forget (lite mode, no state needed)
+                    controller.setMapStyle(_kDarkMapStyle);
+                  },
+                  myLocationEnabled: false,
+                  myLocationButtonEnabled: false,
+                  zoomControlsEnabled: false,
+                  mapToolbarEnabled: false,
+                  compassEnabled: false,
+                  scrollGesturesEnabled: false,
+                  zoomGesturesEnabled: false,
+                  rotateGesturesEnabled: false,
+                  tiltGesturesEnabled: false,
+                  polylines: {
+                    gmaps.Polyline(
+                      polylineId: const gmaps.PolylineId('route'),
+                      points: gmPoints,
+                      color: const Color(0xFFE8003D),
+                      width: 3,
                     ),
-                    PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: routeLatLng,
-                          color: const Color(0xFFE8003D),
-                          strokeWidth: 3,
-                        ),
-                      ],
+                  },
+                  markers: {
+                    // Start marker — white
+                    gmaps.Marker(
+                      markerId: const gmaps.MarkerId('start'),
+                      position: gmPoints.first,
+                      icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+                          gmaps.BitmapDescriptor.hueAzure),
                     ),
-                    // Start dot
-                    MarkerLayer(markers: [
-                      Marker(
-                        point: routeLatLng.first,
-                        width: 10,
-                        height: 10,
-                        child: Container(
-                          decoration: const BoxDecoration(
-                            color: Colors.white,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ),
-                      Marker(
-                        point: routeLatLng.last,
-                        width: 10,
-                        height: 10,
-                        child: Container(
-                          decoration: const BoxDecoration(
-                            color: Color(0xFFE8003D),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ),
-                    ]),
-                  ],
+                    // End marker — red
+                    gmaps.Marker(
+                      markerId: const gmaps.MarkerId('end'),
+                      position: gmPoints.last,
+                      icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+                          gmaps.BitmapDescriptor.hueRed),
+                    ),
+                  },
                 ),
               ),
             ),
 
+          // ── Stats panel ───────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Title + date
+                // Title + date row
                 Row(
                   children: [
-                    if (!hasRoute)
+                    if (!hasRoute) ...[
                       Container(
                         width: 36,
                         height: 36,
@@ -286,7 +339,8 @@ class _RideCard extends StatelessWidget {
                         child: const Icon(Icons.motorcycle_rounded,
                             color: Color(0xFFE8003D), size: 16),
                       ),
-                    if (!hasRoute) const SizedBox(width: 10),
+                      const SizedBox(width: 10),
+                    ],
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -361,7 +415,8 @@ class _RideCard extends StatelessWidget {
           Icon(icon, color: Colors.white38, size: 12),
           const SizedBox(width: 5),
           Text(label,
-              style: const TextStyle(color: Colors.white38, fontSize: 11)),
+              style:
+                  const TextStyle(color: Colors.white38, fontSize: 11)),
         ],
       ),
     );

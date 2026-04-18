@@ -1,13 +1,43 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../services/group_ride_service.dart';
 import '../services/route_service.dart';
+
+// ── Dark map style ────────────────────────────────────────────────────────────
+
+const _kDarkMapStyle = '''[
+  {"elementType":"geometry","stylers":[{"color":"#0a0a0a"}]},
+  {"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+  {"elementType":"labels.text.stroke","stylers":[{"color":"#0a0a0a"}]},
+  {"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#1a1a1a"}]},
+  {"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},
+  {"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},
+  {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+  {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#111111"}]},
+  {"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
+  {"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#0a0a0a"}]},
+  {"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#1e1e1e"}]},
+  {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},
+  {"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#212121"}]},
+  {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#2a2a2a"}]},
+  {"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#2d2d2d"}]},
+  {"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
+  {"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#050505"}]},
+  {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}
+]''';
+
+// ── Helper ────────────────────────────────────────────────────────────────────
+
+gmaps.LatLng _gl(LatLng p) => gmaps.LatLng(p.latitude, p.longitude);
+
+// ── Screen ────────────────────────────────────────────────────────────────────
 
 class GroupRideScreen extends StatefulWidget {
   final String? initialCode;
@@ -19,7 +49,7 @@ class GroupRideScreen extends StatefulWidget {
 
 class _GroupRideScreenState extends State<GroupRideScreen>
     with SingleTickerProviderStateMixin {
-  final MapController _mapController = MapController();
+  gmaps.GoogleMapController? _mapController;
   String? _roomCode;
   LatLng _myPosition = const LatLng(0, 0);
   List<RiderPosition> _riders = [];
@@ -35,11 +65,14 @@ class _GroupRideScreenState extends State<GroupRideScreen>
   StreamSubscription<List<Map<String, dynamic>>>? _sosStream;
   List<Map<String, dynamic>> _activeSOSAlerts = [];
 
+  // Quick alerts
+  StreamSubscription<List<Map<String, dynamic>>>? _alertsStream;
+  List<Map<String, dynamic>> _recentAlerts = [];
+
   @override
   void initState() {
     super.initState();
     _startGPS();
-    // Reconnect to an already-active session if the service has one running
     if (GroupRideService.isActive) {
       _connectToRoom(GroupRideService.activeCode!);
     } else if (widget.initialCode != null) {
@@ -49,13 +82,11 @@ class _GroupRideScreenState extends State<GroupRideScreen>
 
   @override
   void dispose() {
-    // Cancel UI streams only — the service's GPS keeps running in background
-    // so the group ride stays alive while the user browses other tabs
     _gpsStream?.cancel();
     _ridersStream?.cancel();
     _sosStream?.cancel();
     _alertsStream?.cancel();
-    _mapController.dispose();
+    _mapController?.dispose();
     _codeController.dispose();
     super.dispose();
   }
@@ -66,8 +97,6 @@ class _GroupRideScreenState extends State<GroupRideScreen>
       perm = await Geolocator.requestPermission();
     }
 
-    // This stream is for the map UI only — actual Firestore updates
-    // are handled by GroupRideService._startPersistentGPS()
     _gpsStream = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.bestForNavigation,
@@ -83,8 +112,11 @@ class _GroupRideScreenState extends State<GroupRideScreen>
         _mapReady = true;
       });
 
+      // Auto-centre on first GPS fix
       if (_mapReady && _myRoute.length <= 2) {
-        try { _mapController.move(ll, 15); } catch (_) {}
+        _mapController?.animateCamera(
+          gmaps.CameraUpdate.newLatLng(_gl(ll)),
+        );
       }
     });
   }
@@ -115,10 +147,6 @@ class _GroupRideScreenState extends State<GroupRideScreen>
     setState(() => _isLoading = false);
   }
 
-  // Quick alerts
-  StreamSubscription<List<Map<String, dynamic>>>? _alertsStream;
-  List<Map<String, dynamic>> _recentAlerts = [];
-
   void _connectToRoom(String code) {
     setState(() {
       _roomCode = code;
@@ -129,28 +157,22 @@ class _GroupRideScreenState extends State<GroupRideScreen>
       if (mounted) setState(() => _riders = riders);
     });
 
-    // Subscribe to SOS alerts
     _sosStream?.cancel();
     _sosStream = GroupRideService.streamSOS(code).listen((alerts) {
       if (!mounted) return;
       setState(() => _activeSOSAlerts = alerts);
     });
 
-    // Subscribe to quick alerts
     _alertsStream?.cancel();
     _alertsStream = GroupRideService.streamAlerts(code).listen((alerts) {
       if (!mounted) return;
       setState(() => _recentAlerts = alerts);
-      if (alerts.isNotEmpty) {
-        HapticFeedback.selectionClick();
-      }
+      if (alerts.isNotEmpty) HapticFeedback.selectionClick();
     });
   }
 
   void _leaveRide() {
-    if (_roomCode != null) {
-      GroupRideService.leaveGroupRide(_roomCode!); // stops service GPS too
-    }
+    if (_roomCode != null) GroupRideService.leaveGroupRide(_roomCode!);
     _ridersStream?.cancel();
     _ridersStream = null;
     setState(() {
@@ -162,9 +184,7 @@ class _GroupRideScreenState extends State<GroupRideScreen>
   }
 
   void _showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg)),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   void _showJoinSheet() {
@@ -191,13 +211,99 @@ class _GroupRideScreenState extends State<GroupRideScreen>
     );
   }
 
+  // ── Map polylines & markers ──────────────────────────────────────────────
+
+  Set<gmaps.Polyline> _buildPolylines() {
+    final polys = <gmaps.Polyline>{};
+
+    // Planned route — blue dashed
+    if (RouteService.hasRoute) {
+      polys.add(gmaps.Polyline(
+        polylineId: const gmaps.PolylineId('planned'),
+        points: RouteService.activePlan!.routePoints.map(_gl).toList(),
+        color: const Color(0xFF2979FF).withOpacity(0.8),
+        width: 5,
+        patterns: [
+          gmaps.PatternItem.dash(12),
+          gmaps.PatternItem.gap(6),
+        ],
+      ));
+    }
+
+    // Ridden route — red solid
+    if (_myRoute.length > 1) {
+      polys.add(gmaps.Polyline(
+        polylineId: const gmaps.PolylineId('ridden'),
+        points: _myRoute.map(_gl).toList(),
+        color: const Color(0xFFE8003D).withOpacity(0.85),
+        width: 4,
+      ));
+    }
+
+    return polys;
+  }
+
+  Set<gmaps.Marker> _buildMarkers() {
+    final markers = <gmaps.Marker>{};
+
+    // Route waypoint markers (blue)
+    if (RouteService.hasRoute) {
+      final wps = RouteService.activePlan!.waypoints;
+      for (var i = 0; i < wps.length; i++) {
+        final label = i == 0
+            ? 'A'
+            : i == wps.length - 1
+                ? 'B'
+                : '$i';
+        markers.add(gmaps.Marker(
+          markerId: gmaps.MarkerId('wp_$i'),
+          position: _gl(wps[i].position),
+          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+              gmaps.BitmapDescriptor.hueBlue),
+          infoWindow: gmaps.InfoWindow(
+            title: label,
+            snippet: wps[i].label,
+          ),
+        ));
+      }
+    }
+
+    // Other riders (orange markers with name + emoji in InfoWindow)
+    for (final rider in _riders) {
+      if (rider.lat == 0 && rider.lng == 0) continue;
+      markers.add(gmaps.Marker(
+        markerId: gmaps.MarkerId('rider_${rider.riderName}'),
+        position: gmaps.LatLng(rider.lat, rider.lng),
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueOrange),
+        infoWindow: gmaps.InfoWindow(
+          title: '${rider.emoji}  ${rider.riderName}',
+        ),
+      ));
+    }
+
+    // My position (red marker)
+    if (_myPosition.latitude != 0) {
+      markers.add(gmaps.Marker(
+        markerId: const gmaps.MarkerId('me'),
+        position: _gl(_myPosition),
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueRed),
+        infoWindow: const gmaps.InfoWindow(title: '📍 YOU'),
+      ));
+    }
+
+    return markers;
+  }
+
+  // ── Build ────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF080808),
       body: Stack(
         children: [
-          // Map
           _buildMap(),
 
           // Top bar
@@ -206,14 +312,12 @@ class _GroupRideScreenState extends State<GroupRideScreen>
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Row(
                 children: [
-                  // Back button
                   _glassButton(
                     onTap: () => Navigator.pop(context),
                     child: const Icon(Icons.arrow_back_rounded,
                         color: Colors.white70, size: 20),
                   ),
                   const SizedBox(width: 10),
-                  // Title
                   Expanded(
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -266,20 +370,22 @@ class _GroupRideScreenState extends State<GroupRideScreen>
                       child: const Icon(Icons.share_rounded,
                           color: Colors.white70, size: 20),
                     ),
-                  ]
+                  ],
                 ],
               ),
             ),
           ),
 
-          // Center my location button
+          // My-location button
           Positioned(
             right: 16,
             bottom: 120,
             child: _glassButton(
               onTap: () {
                 if (_mapReady) {
-                  _mapController.move(_myPosition, 15);
+                  _mapController?.animateCamera(
+                    gmaps.CameraUpdate.newLatLngZoom(_gl(_myPosition), 15),
+                  );
                 }
               },
               child: const Icon(Icons.my_location_rounded,
@@ -287,7 +393,7 @@ class _GroupRideScreenState extends State<GroupRideScreen>
             ),
           ),
 
-          // Bottom action area
+          // Bottom panel
           Positioned(
             left: 0,
             right: 0,
@@ -295,13 +401,16 @@ class _GroupRideScreenState extends State<GroupRideScreen>
             child: _buildBottomPanel(),
           ),
 
-          // SOS Alert Overlay
+          // SOS overlay
           if (_activeSOSAlerts.isNotEmpty)
             _SOSAlertOverlay(
               alerts: _activeSOSAlerts,
               onDismiss: () => setState(() => _activeSOSAlerts = []),
               onNavigate: (lat, lng) {
-                _mapController.move(LatLng(lat, lng), 16);
+                _mapController?.animateCamera(
+                  gmaps.CameraUpdate.newLatLngZoom(
+                      gmaps.LatLng(lat, lng), 16),
+                );
               },
             ),
         ],
@@ -310,120 +419,31 @@ class _GroupRideScreenState extends State<GroupRideScreen>
   }
 
   Widget _buildMap() {
-    return FlutterMap(
-      mapController: _mapController,
-      options: MapOptions(
-        initialCenter: _myPosition.latitude != 0
-            ? _myPosition
-            : const LatLng(3.1390, 101.6869), // Default: KL
-        initialZoom: 15,
-        maxZoom: 19,
-        minZoom: 3,
+    final initialTarget = _myPosition.latitude != 0
+        ? _gl(_myPosition)
+        : const gmaps.LatLng(3.1390, 101.6869); // Default: KL
+
+    return gmaps.GoogleMap(
+      onMapCreated: (controller) async {
+        _mapController = controller;
+        await controller.setMapStyle(_kDarkMapStyle);
+        if (_myPosition.latitude != 0) {
+          controller.animateCamera(
+            gmaps.CameraUpdate.newLatLngZoom(_gl(_myPosition), 15),
+          );
+        }
+      },
+      initialCameraPosition: gmaps.CameraPosition(
+        target: initialTarget,
+        zoom: 15,
       ),
-      children: [
-        // Dark map tiles
-        TileLayer(
-          urlTemplate:
-              'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
-          subdomains: const ['a', 'b', 'c', 'd'],
-          userAgentPackageName: 'com.example.motopulse',
-          maxZoom: 19,
-        ),
-
-        // Planned route (blue)
-        if (RouteService.hasRoute)
-          PolylineLayer(
-            polylines: [
-              Polyline(
-                points: RouteService.activePlan!.routePoints,
-                color: const Color(0xFF2979FF).withOpacity(0.7),
-                strokeWidth: 4,
-                borderColor: const Color(0xFF2979FF).withOpacity(0.2),
-                borderStrokeWidth: 8,
-                pattern: StrokePattern.dashed(segments: [12, 6]),
-              ),
-            ],
-          ),
-
-        // Ridden route (red)
-        if (_myRoute.length > 1)
-          PolylineLayer(
-            polylines: [
-              Polyline(
-                points: _myRoute,
-                color: const Color(0xFFE8003D).withOpacity(0.8),
-                strokeWidth: 3.5,
-                borderColor: const Color(0xFFE8003D).withOpacity(0.2),
-                borderStrokeWidth: 6,
-              ),
-            ],
-          ),
-
-        // Planned route waypoint markers
-        if (RouteService.hasRoute)
-          MarkerLayer(
-            markers: RouteService.activePlan!.waypoints
-                .asMap()
-                .entries
-                .map((e) => Marker(
-                      point: e.value.position,
-                      width: 32,
-                      height: 32,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: const Color(0xFF2979FF),
-                          border:
-                              Border.all(color: Colors.white, width: 2),
-                        ),
-                        child: Center(
-                          child: Text(
-                            e.key == 0
-                                ? 'A'
-                                : e.key ==
-                                        RouteService
-                                                .activePlan!
-                                                .waypoints
-                                                .length -
-                                            1
-                                    ? 'B'
-                                    : '${e.key}',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ),
-                    ))
-                .toList(),
-          ),
-
-        // Other riders markers
-        MarkerLayer(
-          markers: [
-            // Other riders
-            ..._riders.map((rider) {
-              if (rider.lat == 0 && rider.lng == 0) return null;
-              return Marker(
-                point: LatLng(rider.lat, rider.lng),
-                width: 56,
-                height: 70,
-                child: _RiderMarker(rider: rider, isMe: false),
-              );
-            }).whereType<Marker>(),
-
-            // My marker
-            if (_myPosition.latitude != 0)
-              Marker(
-                point: _myPosition,
-                width: 56,
-                height: 70,
-                child: const _MyMarker(),
-              ),
-          ],
-        ),
-      ],
+      myLocationEnabled: false,
+      myLocationButtonEnabled: false,
+      zoomControlsEnabled: false,
+      mapToolbarEnabled: false,
+      compassEnabled: false,
+      polylines: _buildPolylines(),
+      markers: _buildMarkers(),
     );
   }
 
@@ -482,8 +502,8 @@ class _GroupRideScreenState extends State<GroupRideScreen>
                             color: const Color(0xFFE8003D).withOpacity(0.1),
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                                color: const Color(0xFFE8003D)
-                                    .withOpacity(0.3)),
+                                color:
+                                    const Color(0xFFE8003D).withOpacity(0.3)),
                           ),
                           child: Center(
                             child: Text(r.emoji,
@@ -504,7 +524,7 @@ class _GroupRideScreenState extends State<GroupRideScreen>
                 ),
               ),
 
-            // ── Quick Alerts ──────────────────────────────────────────────
+            // ── Quick Alerts ────────────────────────────────────────────────
             const SizedBox(height: 16),
             const Text('QUICK ALERTS',
                 style: TextStyle(
@@ -586,7 +606,7 @@ class _GroupRideScreenState extends State<GroupRideScreen>
       );
     }
 
-    // Not connected — show create/join options
+    // Not connected — create / join panel
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 36),
       decoration: BoxDecoration(
@@ -695,101 +715,7 @@ class _GroupRideScreenState extends State<GroupRideScreen>
   }
 }
 
-// ── Rider marker widget ──────────────────────────────────────────────────────
-
-class _RiderMarker extends StatelessWidget {
-  final RiderPosition rider;
-  final bool isMe;
-  const _RiderMarker({required this.rider, required this.isMe});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1A1A),
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: const Color(0xFFFF6B00),
-              width: 2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFFF6B00).withOpacity(0.4),
-                blurRadius: 10,
-              )
-            ],
-          ),
-          child: Center(
-            child: Text(rider.emoji, style: const TextStyle(fontSize: 18)),
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: const Color(0xFF111111).withOpacity(0.9),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            rider.riderName,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 9, fontWeight: FontWeight.w500),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _MyMarker extends StatelessWidget {
-  const _MyMarker();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: const Color(0xFF120008),
-            shape: BoxShape.circle,
-            border: Border.all(color: const Color(0xFFE8003D), width: 2.5),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFE8003D).withOpacity(0.5),
-                blurRadius: 14,
-                spreadRadius: 2,
-              )
-            ],
-          ),
-          child: const Icon(Icons.navigation_rounded,
-              color: Color(0xFFE8003D), size: 22),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: const Color(0xFFE8003D).withOpacity(0.9),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: const Text('YOU',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1)),
-        ),
-      ],
-    );
-  }
-}
-
-// ── SOS Alert Overlay ───────────────────────────────────────────────────────
+// ── SOS Alert Overlay ────────────────────────────────────────────────────────
 
 class _SOSAlertOverlay extends StatefulWidget {
   final List<Map<String, dynamic>> alerts;
@@ -863,8 +789,7 @@ class _SOSAlertOverlayState extends State<_SOSAlertOverlay>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('🆘',
-                        style: TextStyle(fontSize: 40)),
+                    const Text('🆘', style: TextStyle(fontSize: 40)),
                     const SizedBox(height: 12),
                     const Text(
                       'SOS ALERT',
@@ -929,8 +854,7 @@ class _SOSAlertOverlayState extends State<_SOSAlertOverlay>
                             decoration: BoxDecoration(
                               color: const Color(0xFF2A2A2A),
                               borderRadius: BorderRadius.circular(12),
-                              border:
-                                  Border.all(color: Colors.white12),
+                              border: Border.all(color: Colors.white12),
                             ),
                             child: const Icon(Icons.close_rounded,
                                 color: Colors.white38, size: 20),
@@ -949,7 +873,7 @@ class _SOSAlertOverlayState extends State<_SOSAlertOverlay>
   }
 }
 
-// ── Join Sheet ──────────────────────────────────────────────────────────────
+// ── Join Sheet ───────────────────────────────────────────────────────────────
 
 class _JoinSheet extends StatefulWidget {
   final void Function(String code) onJoin;
@@ -1060,8 +984,7 @@ class _JoinSheetState extends State<_JoinSheet> {
             children: [
               Expanded(
                   child: Container(
-                      height: 1,
-                      color: Colors.white.withOpacity(0.08))),
+                      height: 1, color: Colors.white.withOpacity(0.08))),
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 12),
                 child: Text('OR',
@@ -1072,8 +995,7 @@ class _JoinSheetState extends State<_JoinSheet> {
               ),
               Expanded(
                   child: Container(
-                      height: 1,
-                      color: Colors.white.withOpacity(0.08))),
+                      height: 1, color: Colors.white.withOpacity(0.08))),
             ],
           ),
           const SizedBox(height: 12),
@@ -1081,8 +1003,7 @@ class _JoinSheetState extends State<_JoinSheet> {
             onTap: () async {
               final code = await Navigator.push<String>(
                 context,
-                MaterialPageRoute(
-                    builder: (_) => const _QRScanPage()),
+                MaterialPageRoute(builder: (_) => const _QRScanPage()),
               );
               if (code != null && code.length >= 6) {
                 widget.onJoin(code.substring(0, 6).toUpperCase());
@@ -1094,8 +1015,8 @@ class _JoinSheetState extends State<_JoinSheet> {
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1A1A),
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                    color: Colors.white.withOpacity(0.1)),
+                border:
+                    Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1119,7 +1040,7 @@ class _JoinSheetState extends State<_JoinSheet> {
   }
 }
 
-// ── Share Sheet ─────────────────────────────────────────────────────────────
+// ── Share Sheet ──────────────────────────────────────────────────────────────
 
 class _ShareSheet extends StatelessWidget {
   final String code;
@@ -1177,7 +1098,6 @@ class _ShareSheet extends StatelessWidget {
               ),
             ),
           ),
-
           const SizedBox(height: 20),
 
           // Code display
@@ -1225,7 +1145,7 @@ class _ShareSheet extends StatelessWidget {
   }
 }
 
-// ── QR Scanner Page ───────────────────────────────────────────────────────────
+// ── QR Scanner Page ──────────────────────────────────────────────────────────
 
 class _QRScanPage extends StatefulWidget {
   const _QRScanPage();
@@ -1249,7 +1169,6 @@ class _QRScanPageState extends State<_QRScanPage> {
     final barcode = capture.barcodes.firstOrNull;
     final raw = barcode?.rawValue?.trim().toUpperCase() ?? '';
     if (raw.isEmpty) return;
-    // Accept any 6-character alphanumeric code — could be raw code or inside a QR
     final match = RegExp(r'[A-Z0-9]{6}').firstMatch(raw);
     if (match != null) {
       _scanned = true;
@@ -1272,31 +1191,24 @@ class _QRScanPageState extends State<_QRScanPage> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.flashlight_on_rounded,
-                color: Colors.white54),
+            icon: const Icon(Icons.flashlight_on_rounded, color: Colors.white54),
             onPressed: () => _controller.toggleTorch(),
           ),
         ],
       ),
       body: Stack(
         children: [
-          MobileScanner(
-            controller: _controller,
-            onDetect: _onDetect,
-          ),
-          // Aim frame overlay
+          MobileScanner(controller: _controller, onDetect: _onDetect),
           Center(
             child: Container(
               width: 230,
               height: 230,
               decoration: BoxDecoration(
-                border: Border.all(
-                    color: const Color(0xFFE8003D), width: 2.5),
+                border: Border.all(color: const Color(0xFFE8003D), width: 2.5),
                 borderRadius: BorderRadius.circular(18),
               ),
             ),
           ),
-          // Corner accents
           Center(
             child: SizedBox(
               width: 230,
@@ -1319,9 +1231,7 @@ class _QRScanPageState extends State<_QRScanPage> {
                 child: const Text(
                   'Point at the host\'s QR code',
                   style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 13,
-                      letterSpacing: 0.5),
+                      color: Colors.white70, fontSize: 13, letterSpacing: 0.5),
                 ),
               ),
             ),
@@ -1343,24 +1253,18 @@ class _CornerPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    // Top-left
     canvas.drawLine(Offset(r, 0), Offset(r + len, 0), p);
     canvas.drawLine(Offset(0, r), Offset(0, r + len), p);
-    // Top-right
-    canvas.drawLine(Offset(size.width - r - len, 0), Offset(size.width - r, 0), p);
+    canvas.drawLine(
+        Offset(size.width - r - len, 0), Offset(size.width - r, 0), p);
     canvas.drawLine(Offset(size.width, r), Offset(size.width, r + len), p);
-    // Bottom-left
     canvas.drawLine(Offset(r, size.height), Offset(r + len, size.height), p);
-    canvas.drawLine(Offset(0, size.height - r - len), Offset(0, size.height - r), p);
-    // Bottom-right
     canvas.drawLine(
-        Offset(size.width - r - len, size.height),
-        Offset(size.width - r, size.height),
-        p);
-    canvas.drawLine(
-        Offset(size.width, size.height - r - len),
-        Offset(size.width, size.height - r),
-        p);
+        Offset(0, size.height - r - len), Offset(0, size.height - r), p);
+    canvas.drawLine(Offset(size.width - r - len, size.height),
+        Offset(size.width - r, size.height), p);
+    canvas.drawLine(Offset(size.width, size.height - r - len),
+        Offset(size.width, size.height - r), p);
   }
 
   @override

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/ride_model.dart';
@@ -15,7 +15,24 @@ import '../widgets/crash_alert_overlay.dart';
 import '../widgets/glass_card.dart';
 import 'group_ride_screen.dart';
 import 'speedometer_screen.dart';
-// ignore_for_file: unused_import
+
+const String _kDarkMapStyle = '''[
+  {"elementType":"geometry","stylers":[{"color":"#141414"}]},
+  {"elementType":"labels.icon","stylers":[{"visibility":"off"}]},
+  {"elementType":"labels.text.fill","stylers":[{"color":"#6b6b6b"}]},
+  {"elementType":"labels.text.stroke","stylers":[{"color":"#141414"}]},
+  {"featureType":"poi","stylers":[{"visibility":"off"}]},
+  {"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2a2a2a"}]},
+  {"featureType":"road","elementType":"geometry.stroke","stylers":[{"color":"#1a1a1a"}]},
+  {"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#383838"}]},
+  {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3d3d3d"}]},
+  {"featureType":"road.highway","elementType":"labels.text.fill","stylers":[{"color":"#888888"}]},
+  {"featureType":"transit","stylers":[{"visibility":"off"}]},
+  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]}
+]''';
+
+/// Convert latlong2.LatLng → gmaps.LatLng
+gmaps.LatLng _gl(LatLng p) => gmaps.LatLng(p.latitude, p.longitude);
 
 class RideTrackingScreen extends StatefulWidget {
   const RideTrackingScreen({super.key});
@@ -26,10 +43,10 @@ class RideTrackingScreen extends StatefulWidget {
 
 class _RideTrackingScreenState extends State<RideTrackingScreen>
     with SingleTickerProviderStateMixin {
-  // Map & location state (stays in widget)
-  LatLng _currentLatLng = const LatLng(3.1390, 101.6869); // default: KL
+  // Map
+  gmaps.GoogleMapController? _mapController;
+  LatLng _currentLatLng = const LatLng(3.1390, 101.6869);
   bool _locationReady = false;
-  final MapController _mapController = MapController();
 
   // Profile-driven settings
   double _speedLimitKmh = 100.0;
@@ -56,7 +73,6 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     _pulseAnim = Tween<double>(begin: 0.8, end: 1.2).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
-    // Load profile settings
     ProfileService.load().then((p) {
       if (mounted) setState(() {
         _speedLimitKmh = p.speedLimitKmh;
@@ -64,7 +80,6 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         _fuelEfficiencyKmL = p.fuelEfficiencyKmL;
       });
     });
-    // Subscribe to crash detector — show alert overlay when impact detected
     _crashSub = CrashDetector.onCrashDetected.listen((_) {
       if (!mounted) return;
       Navigator.of(context).push(PageRouteBuilder(
@@ -76,22 +91,17 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         transitionDuration: const Duration(milliseconds: 400),
       ));
     });
-
-    // Subscribe to RideService — rebuilds UI when service emits
     _rideServiceSub = RideService.onChange.listen((_) {
       if (!mounted) return;
-      // Sync map to latest GPS point
       final pts = RideService.routePoints;
       if (pts.isNotEmpty) {
-        final ll = pts.last;
-        _currentLatLng = ll;
+        _currentLatLng = pts.last;
         if (RideService.isRiding) {
-          try {
-            _mapController.move(ll, _mapController.camera.zoom);
-          } catch (_) {}
+          _mapController?.animateCamera(
+            gmaps.CameraUpdate.newLatLng(_gl(_currentLatLng)),
+          );
         }
       }
-      // Speed alert
       final overLimit = RideService.speedKmh > _speedLimitKmh;
       if (overLimit && !_speedAlertShownOnce) {
         HapticFeedback.heavyImpact();
@@ -101,7 +111,6 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       _speedAlertActive = overLimit;
       setState(() {});
     });
-    // Delay init until after first frame so MapController is ready
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _initLocation();
     });
@@ -112,8 +121,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     _pulseController.dispose();
     _rideServiceSub?.cancel();
     _crashSub?.cancel();
-    // NOTE: do NOT cancel RideService GPS here — it must survive widget disposal
-    _mapController.dispose();
+    _mapController?.dispose();
     super.dispose();
   }
 
@@ -123,9 +131,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       perm = await Geolocator.requestPermission();
     }
     if (perm == LocationPermission.deniedForever) return;
-
     try {
-      // Timeout after 8 seconds so emulators don't hang
       final pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       ).timeout(const Duration(seconds: 8));
@@ -135,13 +141,13 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
           _currentLatLng = ll;
           _locationReady = true;
         });
-        // Safe to move — widget is already built by this point
-        try {
-          _mapController.move(ll, 15);
-        } catch (_) {}
+        _mapController?.animateCamera(
+          gmaps.CameraUpdate.newCameraPosition(
+            gmaps.CameraPosition(target: _gl(ll), zoom: 15),
+          ),
+        );
       }
     } catch (_) {
-      // Location unavailable or timed out — use default KL coords
       if (mounted) setState(() => _locationReady = true);
     }
   }
@@ -152,8 +158,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       _showSnack('Please enable location services.');
       return;
     }
-    RideService.startRide(
-        initialPos: _locationReady ? _currentLatLng : null);
+    RideService.startRide(initialPos: _locationReady ? _currentLatLng : null);
   }
 
   Future<void> _stopRide() async {
@@ -171,23 +176,15 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     }
   }
 
-  void _cancelRide() {
-    RideService.cancelRide();
-  }
-
-  void _showSnack(String msg) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg)));
-  }
+  void _showSnack(String msg) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
   void _showRoutePlanner() {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _RoutePlannerSheet(
-        onRouteSet: () => setState(() {}),
-      ),
+      builder: (_) => _RoutePlannerSheet(onRouteSet: () => setState(() {})),
     );
   }
 
@@ -208,8 +205,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
           children: [
             Center(
               child: Container(
-                width: 36,
-                height: 4,
+                width: 36, height: 4,
                 decoration: BoxDecoration(
                   color: Colors.white12,
                   borderRadius: BorderRadius.circular(2),
@@ -218,26 +214,16 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
             ),
             const SizedBox(height: 20),
             const Text('RIDE COMPLETE',
-                style: TextStyle(
-                    color: Color(0xFFE8003D),
-                    fontSize: 11,
-                    letterSpacing: 3)),
+                style: TextStyle(color: Color(0xFFE8003D), fontSize: 11, letterSpacing: 3)),
             const SizedBox(height: 6),
             Text(ride.title,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w300)),
+                style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w300)),
             const SizedBox(height: 24),
-            Row(
-              children: [
-                _summaryTile(
-                    'DISTANCE', '${ride.distanceKm.toStringAsFixed(2)} km'),
-                _summaryTile('DURATION', ride.formattedDuration),
-                _summaryTile('TOP SPEED',
-                    '${ride.maxSpeedKmh.toStringAsFixed(0)} km/h'),
-              ],
-            ),
+            Row(children: [
+              _summaryTile('DISTANCE', '${ride.distanceKm.toStringAsFixed(2)} km'),
+              _summaryTile('DURATION', ride.formattedDuration),
+              _summaryTile('TOP SPEED', '${ride.maxSpeedKmh.toStringAsFixed(0)} km/h'),
+            ]),
             const SizedBox(height: 24),
             GestureDetector(
               onTap: () => Navigator.pop(context),
@@ -250,10 +236,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                 ),
                 child: const Center(
                   child: Text('DONE',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 3)),
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, letterSpacing: 3)),
                 ),
               ),
             ),
@@ -265,727 +248,491 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
   Widget _summaryTile(String label, String value) {
     return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(
-                  color: Colors.white24, fontSize: 9, letterSpacing: 2)),
-          const SizedBox(height: 4),
-          Text(value,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500)),
-        ],
-      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: const TextStyle(color: Colors.white24, fontSize: 9, letterSpacing: 2)),
+        const SizedBox(height: 4),
+        Text(value,
+            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500)),
+      ]),
     );
   }
 
-  // Formatted time now provided by RideService.formattedTime
+  Set<gmaps.Polyline> _buildPolylines() {
+    final result = <gmaps.Polyline>{};
+    if (RouteService.hasRoute && RouteService.activePlan!.routePoints.length > 1) {
+      result.add(gmaps.Polyline(
+        polylineId: const gmaps.PolylineId('planned'),
+        points: RouteService.activePlan!.routePoints.map(_gl).toList(),
+        color: const Color(0x882979FF),
+        width: 5,
+        patterns: [gmaps.PatternItem.dash(12), gmaps.PatternItem.gap(6)],
+      ));
+    }
+    if (RideService.routePoints.length > 1) {
+      result.add(gmaps.Polyline(
+        polylineId: const gmaps.PolylineId('ridden'),
+        points: RideService.routePoints.map(_gl).toList(),
+        color: const Color(0xFFE8003D),
+        width: 5,
+      ));
+    }
+    return result;
+  }
+
+  Set<gmaps.Marker> _buildMarkers() {
+    final result = <gmaps.Marker>{};
+    // My position
+    result.add(gmaps.Marker(
+      markerId: const gmaps.MarkerId('me'),
+      position: _gl(_currentLatLng),
+      icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(gmaps.BitmapDescriptor.hueRed),
+      anchor: const Offset(0.5, 0.5),
+      flat: true,
+    ));
+    // Waypoint markers
+    if (RouteService.hasRoute) {
+      final wpts = RouteService.activePlan!.waypoints;
+      for (var i = 0; i < wpts.length; i++) {
+        final label = i == 0 ? 'A' : i == wpts.length - 1 ? 'B' : '$i';
+        result.add(gmaps.Marker(
+          markerId: gmaps.MarkerId('wp_$i'),
+          position: _gl(wpts[i].position),
+          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(gmaps.BitmapDescriptor.hueAzure),
+          infoWindow: gmaps.InfoWindow(title: label, snippet: wpts[i].label),
+          anchor: const Offset(0.5, 1.0),
+        ));
+      }
+    }
+    return result;
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: GradientBackground(
-       child: Column(
-        children: [
-          // ── Map (top portion) ─────────────────────────────────────────
+        child: Column(children: [
+          // ── Map ───────────────────────────────────────────────────────────
           Expanded(
             flex: 5,
-            child: Stack(
-              children: [
-                // Real map
-                FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter: _currentLatLng,
-                    initialZoom: 15,
-                    maxZoom: 19,
-                    minZoom: 5,
-                    interactionOptions: const InteractionOptions(
-                      flags: InteractiveFlag.all,
-                    ),
-                  ),
-                  children: [
-                    // Dark OpenStreetMap tiles
-                    TileLayer(
-                      urlTemplate:
-                          'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
-                      subdomains: const ['a', 'b', 'c', 'd'],
-                      userAgentPackageName: 'com.example.motopulse',
-                      maxZoom: 19,
-                    ),
-                    // Planned route (blue dashed)
-                    if (RouteService.hasRoute)
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: RouteService.activePlan!.routePoints,
-                            color: const Color(0xFF2979FF).withOpacity(0.7),
-                            strokeWidth: 4,
-                            borderColor:
-                                const Color(0xFF2979FF).withOpacity(0.2),
-                            borderStrokeWidth: 8,
-                            pattern: StrokePattern.dashed(
-                                segments: [12, 6]),
-                          ),
-                        ],
-                      ),
-
-                    // Waypoint markers
-                    if (RouteService.hasRoute)
-                      MarkerLayer(
-                        markers: RouteService.activePlan!.waypoints
-                            .asMap()
-                            .entries
-                            .map((e) => Marker(
-                                  point: e.value.position,
-                                  width: 30,
-                                  height: 30,
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: const Color(0xFF2979FF),
-                                      border: Border.all(
-                                          color: Colors.white, width: 2),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        e.key == 0
-                                            ? 'A'
-                                            : e.key ==
-                                                    RouteService
-                                                            .activePlan!
-                                                            .waypoints
-                                                            .length -
-                                                        1
-                                                ? 'B'
-                                                : '${e.key}',
-                                        style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w700),
-                                      ),
-                                    ),
-                                  ),
-                                ))
-                            .toList(),
-                      ),
-
-                    // Ridden route (red)
-                    if (RideService.routePoints.length > 1)
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: RideService.routePoints,
-                            color: const Color(0xFFE8003D),
-                            strokeWidth: 4,
-                            borderColor:
-                                const Color(0xFFE8003D).withOpacity(0.25),
-                            borderStrokeWidth: 8,
-                          ),
-                        ],
-                      ),
-                    // My position marker
-                    MarkerLayer(
-                      markers: [
-                        Marker(
-                          point: _currentLatLng,
-                          width: 52,
-                          height: 52,
-                          child: AnimatedBuilder(
-                            animation: _pulseAnim,
-                            builder: (_, __) => Transform.scale(
-                              scale: RideService.isRiding ? _pulseAnim.value : 1.0,
-                              child: Container(
-                                width: 44,
-                                height: 44,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: const Color(0xFFE8003D)
-                                      .withOpacity(0.15),
-                                  border: Border.all(
-                                    color: const Color(0xFFE8003D),
-                                    width: 2,
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: const Color(0xFFE8003D)
-                                          .withOpacity(0.4),
-                                      blurRadius: 12,
-                                      spreadRadius: 2,
-                                    ),
-                                  ],
-                                ),
-                                child: const Icon(
-                                  Icons.navigation_rounded,
-                                  color: Color(0xFFE8003D),
-                                  size: 22,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+            child: Stack(children: [
+              gmaps.GoogleMap(
+                onMapCreated: (ctrl) {
+                  _mapController = ctrl;
+                  ctrl.setMapStyle(_kDarkMapStyle);
+                  if (_locationReady) {
+                    ctrl.animateCamera(gmaps.CameraUpdate.newCameraPosition(
+                      gmaps.CameraPosition(target: _gl(_currentLatLng), zoom: 15),
+                    ));
+                  }
+                },
+                initialCameraPosition: gmaps.CameraPosition(
+                  target: _gl(_currentLatLng),
+                  zoom: 15,
                 ),
+                polylines: _buildPolylines(),
+                markers: _buildMarkers(),
+                myLocationButtonEnabled: false,
+                zoomControlsEnabled: false,
+                mapToolbarEnabled: false,
+                compassEnabled: false,
+              ),
 
-                // Header overlay
-                SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    child: Row(
-                      children: [
-                        const Text(
-                          'TRACKING',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            letterSpacing: 4,
-                            fontWeight: FontWeight.w300,
+              // Header overlay
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Row(children: [
+                    const Text('TRACKING',
+                        style: TextStyle(
+                            color: Colors.white, fontSize: 13,
+                            letterSpacing: 4, fontWeight: FontWeight.w300)),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: _showRoutePlanner,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: RouteService.hasRoute
+                              ? const Color(0xFF2979FF).withOpacity(0.15)
+                              : const Color(0xFF111111).withOpacity(0.9),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: RouteService.hasRoute
+                                ? const Color(0xFF2979FF).withOpacity(0.5)
+                                : Colors.white12,
                           ),
                         ),
-                        const Spacer(),
-                        // Route plan button
-                        GestureDetector(
-                          onTap: () => _showRoutePlanner(),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
+                        child: Row(children: [
+                          Icon(Icons.route_rounded, size: 13,
                               color: RouteService.hasRoute
-                                  ? const Color(0xFF2979FF).withOpacity(0.15)
-                                  : const Color(0xFF111111).withOpacity(0.9),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: RouteService.hasRoute
-                                    ? const Color(0xFF2979FF).withOpacity(0.5)
-                                    : Colors.white12,
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.route_rounded,
-                                  size: 13,
-                                  color: RouteService.hasRoute
-                                      ? const Color(0xFF2979FF)
-                                      : Colors.white38,
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  RouteService.hasRoute
-                                      ? 'ROUTE SET'
-                                      : 'PLAN ROUTE',
-                                  style: TextStyle(
-                                    color: RouteService.hasRoute
-                                        ? const Color(0xFF2979FF)
-                                        : Colors.white30,
-                                    fontSize: 10,
-                                    letterSpacing: 1.5,
-                                  ),
-                                ),
-                              ],
+                                  ? const Color(0xFF2979FF) : Colors.white38),
+                          const SizedBox(width: 5),
+                          Text(
+                            RouteService.hasRoute ? 'ROUTE SET' : 'PLAN ROUTE',
+                            style: TextStyle(
+                              color: RouteService.hasRoute
+                                  ? const Color(0xFF2979FF) : Colors.white30,
+                              fontSize: 10, letterSpacing: 1.5,
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        // Status badge
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF111111).withOpacity(0.9),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: RideService.isRiding
-                                  ? Colors.green.withOpacity(0.5)
-                                  : Colors.white12,
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 6,
-                                height: 6,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: RideService.isRiding
-                                      ? Colors.green
-                                      : Colors.white24,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                RideService.isRiding ? 'LIVE' : 'IDLE',
-                                style: TextStyle(
-                                  color: RideService.isRiding
-                                      ? Colors.green
-                                      : Colors.white30,
-                                  fontSize: 10,
-                                  letterSpacing: 2,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                        ]),
+                      ),
                     ),
-                  ),
-                ),
-
-                // Re-center button
-                Positioned(
-                  right: 16,
-                  bottom: 16,
-                  child: GestureDetector(
-                    onTap: () =>
-                        _mapController.move(_currentLatLng, 15),
-                    child: Container(
-                      width: 40,
-                      height: 40,
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
                         color: const Color(0xFF111111).withOpacity(0.9),
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                            color: Colors.white.withOpacity(0.08)),
+                          color: RideService.isRiding
+                              ? Colors.green.withOpacity(0.5) : Colors.white12,
+                        ),
                       ),
-                      child: const Icon(Icons.my_location_rounded,
-                          color: Colors.white54, size: 18),
+                      child: Row(children: [
+                        Container(
+                          width: 6, height: 6,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: RideService.isRiding ? Colors.green : Colors.white24,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          RideService.isRiding ? 'LIVE' : 'IDLE',
+                          style: TextStyle(
+                            color: RideService.isRiding ? Colors.green : Colors.white30,
+                            fontSize: 10, letterSpacing: 2,
+                          ),
+                        ),
+                      ]),
                     ),
+                  ]),
+                ),
+              ),
+
+              // Re-center button
+              Positioned(
+                right: 16, bottom: 16,
+                child: GestureDetector(
+                  onTap: () => _mapController?.animateCamera(
+                    gmaps.CameraUpdate.newLatLng(_gl(_currentLatLng)),
+                  ),
+                  child: Container(
+                    width: 40, height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111111).withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    ),
+                    child: const Icon(Icons.my_location_rounded,
+                        color: Colors.white54, size: 18),
                   ),
                 ),
-              ],
-            ),
+              ),
+            ]),
           ),
 
-          // ── Speed alert banner ────────────────────────────────────────
+          // ── Speed alert banner ────────────────────────────────────────────
           if (_speedAlertActive)
             Container(
               color: const Color(0xFFE8003D).withOpacity(0.92),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  const Icon(Icons.warning_rounded,
-                      color: Colors.white, size: 18),
-                  const SizedBox(width: 10),
-                  Text(
-                    'SPEED ALERT  ·  ${RideService.speedKmh.toStringAsFixed(0)} km/h',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                      letterSpacing: 1,
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    'limit ${_speedLimitKmh.round()} km/h',
-                    style: const TextStyle(
-                        color: Colors.white70, fontSize: 11),
-                  ),
-                ],
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(children: [
+                const Icon(Icons.warning_rounded, color: Colors.white, size: 18),
+                const SizedBox(width: 10),
+                Text(
+                  'SPEED ALERT  ·  ${RideService.speedKmh.toStringAsFixed(0)} km/h',
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w700,
+                      fontSize: 13, letterSpacing: 1),
+                ),
+                const Spacer(),
+                Text('limit ${_speedLimitKmh.round()} km/h',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11)),
+              ]),
             ),
 
-          // ── Stats panel (bottom portion) ─────────────────────────────
+          // ── Stats panel ───────────────────────────────────────────────────
           ClipRect(
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
               child: Container(
-            color: Colors.black.withOpacity(0.55),
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
-              child: Column(
-              children: [
-                // Speed + distance + duration row
-                Row(
-                  children: [
-                    // Speed — big
-                    Expanded(
-                      flex: 2,
-                      child: GlassCard(
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 16, horizontal: 16),
-                        borderRadius: BorderRadius.circular(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
+                color: Colors.black.withOpacity(0.55),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: SingleChildScrollView(
+                  physics: const NeverScrollableScrollPhysics(),
+                  child: Column(children: [
+                    Row(children: [
+                      Expanded(
+                        flex: 2,
+                        child: GlassCard(
+                          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                          borderRadius: BorderRadius.circular(16),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                             const Text('SPEED',
-                                style: TextStyle(
-                                    color: Colors.white24,
-                                    fontSize: 9,
-                                    letterSpacing: 2)),
+                                style: TextStyle(color: Colors.white24, fontSize: 9, letterSpacing: 2)),
                             const SizedBox(height: 2),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  RideService.speedKmh.toStringAsFixed(0),
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 40,
-                                      fontWeight: FontWeight.w200,
-                                      height: 1),
-                                ),
-                                const Padding(
-                                  padding: EdgeInsets.only(bottom: 4, left: 4),
-                                  child: Text('km/h',
-                                      style: TextStyle(
-                                          color: Colors.white30,
-                                          fontSize: 11)),
-                                ),
-                              ],
-                            ),
-                          ],
+                            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                              Text(
+                                RideService.speedKmh.toStringAsFixed(0),
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 40,
+                                    fontWeight: FontWeight.w200, height: 1),
+                              ),
+                              const Padding(
+                                padding: EdgeInsets.only(bottom: 4, left: 4),
+                                child: Text('km/h',
+                                    style: TextStyle(color: Colors.white30, fontSize: 11)),
+                              ),
+                            ]),
+                          ]),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    // Distance + Duration stacked
-                    Expanded(
-                      flex: 3,
-                      child: Column(
-                        children: [
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 3,
+                        child: Column(children: [
                           _statTile('DISTANCE',
                               '${RideService.distanceKm.toStringAsFixed(2)} km'),
                           const SizedBox(height: 10),
                           _statTile('DURATION', RideService.formattedTime),
-                        ],
+                        ]),
                       ),
-                    ),
-                  ],
-                ),
+                    ]),
 
-                const SizedBox(height: 10),
+                    const SizedBox(height: 10),
 
-                // Max speed row (only when riding)
-                if (RideService.isRiding)
-                  GlassCard(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
-                    borderRadius: BorderRadius.circular(14),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.speed_rounded,
-                            color: Colors.white24, size: 16),
-                        const SizedBox(width: 10),
-                        const Text('Max speed',
-                            style: TextStyle(
-                                color: Colors.white38, fontSize: 13)),
-                        const Spacer(),
-                        Text(
-                          '${RideService.maxSpeedKmh.toStringAsFixed(0)} km/h',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                // Fuel range estimate (while riding)
-                if (RideService.isRiding && _fuelEfficiencyKmL > 0) ...[
-                  const SizedBox(height: 10),
-                  Builder(builder: (_) {
-                    final fuelPct = _fuelTankL > 0 && _fuelEfficiencyKmL > 0
-                        ? (((_fuelTankL - RideService.distanceKm / _fuelEfficiencyKmL) /
-                                _fuelTankL)
-                            .clamp(0.0, 1.0))
-                        : 1.0;
-                    final rangeKm = (fuelPct * _fuelTankL * _fuelEfficiencyKmL)
-                        .clamp(0.0, 9999.0);
-                    final barColor = fuelPct > 0.3
-                        ? const Color(0xFF00C853)
-                        : const Color(0xFFFFD700);
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF111111),
+                    if (RideService.isRiding)
+                      GlassCard(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         borderRadius: BorderRadius.circular(14),
+                        child: Row(children: [
+                          const Icon(Icons.speed_rounded, color: Colors.white24, size: 16),
+                          const SizedBox(width: 10),
+                          const Text('Max speed',
+                              style: TextStyle(color: Colors.white38, fontSize: 13)),
+                          const Spacer(),
+                          Text('${RideService.maxSpeedKmh.toStringAsFixed(0)} km/h',
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 14,
+                                  fontWeight: FontWeight.w500)),
+                        ]),
                       ),
-                      child: Column(
-                        children: [
-                          Row(
-                            children: [
+
+                    if (RideService.isRiding && _fuelEfficiencyKmL > 0) ...[
+                      const SizedBox(height: 10),
+                      Builder(builder: (_) {
+                        final fuelPct = _fuelTankL > 0
+                            ? ((_fuelTankL -
+                                        RideService.distanceKm / _fuelEfficiencyKmL) /
+                                    _fuelTankL)
+                                .clamp(0.0, 1.0)
+                            : 1.0;
+                        final rangeKm =
+                            (fuelPct * _fuelTankL * _fuelEfficiencyKmL).clamp(0.0, 9999.0);
+                        final barColor =
+                            fuelPct > 0.3 ? const Color(0xFF00C853) : const Color(0xFFFFD700);
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF111111),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Column(children: [
+                            Row(children: [
                               Icon(Icons.local_gas_station_rounded,
                                   color: barColor, size: 16),
                               const SizedBox(width: 10),
                               const Text('Est. range',
-                                  style: TextStyle(
-                                      color: Colors.white38, fontSize: 13)),
+                                  style: TextStyle(color: Colors.white38, fontSize: 13)),
                               const Spacer(),
-                              Text(
-                                '~${rangeKm.toStringAsFixed(0)} km left',
-                                style: TextStyle(
-                                    color: barColor,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500),
+                              Text('~${rangeKm.toStringAsFixed(0)} km left',
+                                  style: TextStyle(
+                                      color: barColor, fontSize: 13,
+                                      fontWeight: FontWeight.w500)),
+                            ]),
+                            const SizedBox(height: 8),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: fuelPct,
+                                backgroundColor: Colors.white10,
+                                valueColor: AlwaysStoppedAnimation<Color>(barColor),
+                                minHeight: 3,
                               ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
-                              value: fuelPct,
-                              backgroundColor: Colors.white10,
-                              valueColor:
-                                  AlwaysStoppedAnimation<Color>(barColor),
-                              minHeight: 3,
                             ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }),
-                ],
+                          ]),
+                        );
+                      }),
+                    ],
 
-                // Group ride button (only when not riding)
-                if (!RideService.isRiding)
-                  GestureDetector(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const GroupRideScreen()),
-                    ),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 13),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF111111),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                            color: const Color(0xFFE8003D).withOpacity(0.2)),
+                    if (!RideService.isRiding)
+                      GestureDetector(
+                        onTap: () => Navigator.push(context,
+                            MaterialPageRoute(builder: (_) => const GroupRideScreen())),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF111111),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                                color: const Color(0xFFE8003D).withOpacity(0.2)),
+                          ),
+                          child: Row(children: [
+                            Container(
+                              width: 32, height: 32,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE8003D).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(Icons.group_rounded,
+                                  color: Color(0xFFE8003D), size: 16),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Group Ride',
+                                        style: TextStyle(color: Colors.white, fontSize: 13,
+                                            fontWeight: FontWeight.w500)),
+                                    Text('Ride with your crew on a live map',
+                                        style: TextStyle(color: Colors.white30, fontSize: 11)),
+                                  ]),
+                            ),
+                            const Icon(Icons.arrow_forward_ios_rounded,
+                                color: Colors.white24, size: 14),
+                          ]),
+                        ),
                       ),
-                      child: Row(
-                        children: [
+
+                    const SizedBox(height: 10),
+
+                    GestureDetector(
+                      onTap: () => Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const SpeedometerScreen())),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF111111),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white.withOpacity(0.08)),
+                        ),
+                        child: Row(children: [
                           Container(
-                            width: 32,
-                            height: 32,
+                            width: 32, height: 32,
                             decoration: BoxDecoration(
-                              color:
-                                  const Color(0xFFE8003D).withOpacity(0.1),
+                              color: Colors.white.withOpacity(0.05),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.group_rounded,
-                                color: Color(0xFFE8003D), size: 16),
+                            child: const Icon(Icons.speed_rounded,
+                                color: Colors.white54, size: 16),
                           ),
                           const SizedBox(width: 12),
                           const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('Group Ride',
-                                    style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500)),
-                                Text('Ride with your crew on a live map',
-                                    style: TextStyle(
-                                        color: Colors.white30,
-                                        fontSize: 11)),
-                              ],
-                            ),
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Speedometer',
+                                      style: TextStyle(color: Colors.white, fontSize: 13,
+                                          fontWeight: FontWeight.w500)),
+                                  Text('Full-screen analogue dial',
+                                      style: TextStyle(color: Colors.white30, fontSize: 11)),
+                                ]),
                           ),
                           const Icon(Icons.arrow_forward_ios_rounded,
                               color: Colors.white24, size: 14),
-                        ],
+                        ]),
                       ),
                     ),
-                  ),
 
-                const SizedBox(height: 10),
+                    const SizedBox(height: 10),
 
-                // Speedometer button
-                GestureDetector(
-                  onTap: () => Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => const SpeedometerScreen())),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 13),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF111111),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                          color: Colors.white.withOpacity(0.08)),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.05),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: const Icon(Icons.speed_rounded,
-                              color: Colors.white54, size: 16),
+                    GestureDetector(
+                      onTap: RideService.isSaving
+                          ? null
+                          : (RideService.isRiding ? _stopRide : _startRide),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        width: double.infinity,
+                        height: RideService.isRiding ? 68 : 54,
+                        decoration: BoxDecoration(
+                          color: RideService.isSaving
+                              ? const Color(0xFF1A1A1A)
+                              : (RideService.isRiding
+                                  ? const Color(0xFF0D0D0D)
+                                  : const Color(0xFFE8003D)),
+                          borderRadius: BorderRadius.circular(14),
+                          border: RideService.isRiding
+                              ? Border.all(
+                                  color: const Color(0xFFE8003D).withOpacity(0.5),
+                                  width: 1.5)
+                              : null,
+                          boxShadow: RideService.isRiding
+                              ? [BoxShadow(
+                                  color: const Color(0xFFE8003D).withOpacity(0.15),
+                                  blurRadius: 12, spreadRadius: 1)]
+                              : (!RideService.isSaving
+                                  ? [BoxShadow(
+                                      color: const Color(0xFFE8003D).withOpacity(0.35),
+                                      blurRadius: 16, offset: const Offset(0, 6))]
+                                  : null),
                         ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Speedometer',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500)),
-                              Text('Full-screen analogue dial',
-                                  style: TextStyle(
-                                      color: Colors.white30,
-                                      fontSize: 11)),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.arrow_forward_ios_rounded,
-                            color: Colors.white24, size: 14),
-                      ],
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 10),
-
-                // Start / Stop button
-                GestureDetector(
-                  onTap: RideService.isSaving
-                      ? null
-                      : (RideService.isRiding ? _stopRide : _startRide),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    width: double.infinity,
-                    height: RideService.isRiding ? 68 : 54,
-                    decoration: BoxDecoration(
-                      color: RideService.isSaving
-                          ? const Color(0xFF1A1A1A)
-                          : (RideService.isRiding
-                              ? const Color(0xFF0D0D0D)
-                              : const Color(0xFFE8003D)),
-                      borderRadius: BorderRadius.circular(14),
-                      border: RideService.isRiding
-                          ? Border.all(
-                              color: const Color(0xFFE8003D).withOpacity(0.5),
-                              width: 1.5)
-                          : null,
-                      boxShadow: RideService.isRiding
-                          ? [
-                              BoxShadow(
-                                color: const Color(0xFFE8003D).withOpacity(0.15),
-                                blurRadius: 12,
-                                spreadRadius: 1,
-                              )
-                            ]
-                          : (!RideService.isSaving
-                              ? [
-                                  BoxShadow(
-                                    color: const Color(0xFFE8003D)
-                                        .withOpacity(0.35),
-                                    blurRadius: 16,
-                                    offset: const Offset(0, 6),
-                                  )
-                                ]
-                              : null),
-                    ),
-                    child: RideService.isSaving
-                        ? const Center(
-                            child: SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 1.5, color: Colors.white38),
-                            ),
-                          )
-                        : RideService.isRiding
-                            ? Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.center,
-                                    children: [
+                        child: RideService.isSaving
+                            ? const Center(
+                                child: SizedBox(
+                                  width: 20, height: 20,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 1.5, color: Colors.white38),
+                                ))
+                            : RideService.isRiding
+                                ? Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                    Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                       Container(
-                                        width: 7,
-                                        height: 7,
+                                        width: 7, height: 7,
                                         decoration: const BoxDecoration(
-                                          color: Color(0xFFE8003D),
-                                          shape: BoxShape.circle,
-                                        ),
+                                            color: Color(0xFFE8003D), shape: BoxShape.circle),
                                       ),
                                       const SizedBox(width: 8),
-                                      Text(
-                                        RideService.formattedTime,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 22,
-                                          fontWeight: FontWeight.w200,
-                                          letterSpacing: 2,
-                                        ),
-                                      ),
+                                      Text(RideService.formattedTime,
+                                          style: const TextStyle(
+                                              color: Colors.white, fontSize: 22,
+                                              fontWeight: FontWeight.w200, letterSpacing: 2)),
                                       const SizedBox(width: 16),
-                                      Text(
-                                        '${RideService.distanceKm.toStringAsFixed(2)} km',
-                                        style: const TextStyle(
-                                          color: Colors.white38,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w400,
-                                        ),
-                                      ),
-                                    ],
+                                      Text('${RideService.distanceKm.toStringAsFixed(2)} km',
+                                          style: const TextStyle(
+                                              color: Colors.white38, fontSize: 13,
+                                              fontWeight: FontWeight.w400)),
+                                    ]),
+                                    const SizedBox(height: 4),
+                                    const Text('TAP TO STOP',
+                                        style: TextStyle(
+                                            color: Color(0xFFE8003D), fontSize: 9,
+                                            letterSpacing: 3, fontWeight: FontWeight.w700)),
+                                  ])
+                                : const Center(
+                                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                      Text('START RIDE',
+                                          style: TextStyle(
+                                              color: Colors.white, fontSize: 14,
+                                              fontWeight: FontWeight.w700, letterSpacing: 3)),
+                                      SizedBox(width: 10),
+                                      Icon(Icons.arrow_forward_rounded,
+                                          color: Colors.white, size: 16),
+                                    ]),
                                   ),
-                                  const SizedBox(height: 4),
-                                  const Text(
-                                    'TAP TO STOP',
-                                    style: TextStyle(
-                                      color: Color(0xFFE8003D),
-                                      fontSize: 9,
-                                      letterSpacing: 3,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : const Center(
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      'START RIDE',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: 3,
-                                      ),
-                                    ),
-                                    SizedBox(width: 10),
-                                    Icon(Icons.arrow_forward_rounded,
-                                        color: Colors.white, size: 16),
-                                  ],
-                                ),
-                              ),
-                  ),
-                ),
+                      ),
+                    ),
 
-                // Bottom padding for floating nav
-                const SizedBox(height: 82),
-              ],
+                    const SizedBox(height: 82),
+                  ]),
+                ),
+              ),
             ),
-            ), // SingleChildScrollView
-          ),      // Container
-            ),    // BackdropFilter
-          ),      // ClipRect
-        ],
-       ), // Column
-      ), // GradientBackground
+          ),
+        ]),
+      ),
     );
   }
 
@@ -995,20 +742,14 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       borderRadius: BorderRadius.circular(14),
       child: SizedBox(
         width: double.infinity,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label,
-                style: const TextStyle(
-                    color: Colors.white24, fontSize: 9, letterSpacing: 2)),
-            const SizedBox(height: 2),
-            Text(value,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w300)),
-          ],
-        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: const TextStyle(color: Colors.white24, fontSize: 9, letterSpacing: 2)),
+          const SizedBox(height: 2),
+          Text(value,
+              style: const TextStyle(
+                  color: Colors.white, fontSize: 18, fontWeight: FontWeight.w300)),
+        ]),
       ),
     );
   }
@@ -1031,9 +772,25 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
   ];
   final List<Waypoint?> _waypoints = [null, null];
   bool _isCalculating = false;
+  bool _avoidTolls = false;
+  bool _avoidHighways = false;
   String? _routeInfo;
   String? _error;
-  String? _destWeather; // e.g. "⛅ 28°C · Good to ride"
+  String? _destWeather;
+  List<SegmentInfo> _segments = [];
+  List<SavedRoute> _savedRoutes = [];
+  bool _showSaved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSaved();
+  }
+
+  Future<void> _loadSaved() async {
+    final routes = await RouteService.loadSavedRoutes();
+    if (mounted) setState(() => _savedRoutes = routes);
+  }
 
   @override
   void dispose() {
@@ -1061,10 +818,8 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
   Future<void> _searchAndSet(int index) async {
     final query = _controllers[index].text.trim();
     if (query.isEmpty) return;
-
     setState(() => _error = null);
     final results = await RouteService.searchPlace(query);
-
     if (!mounted) return;
     if (results.isEmpty) {
       setState(() => _error = 'No results for "$query"');
@@ -1074,8 +829,6 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
       _setWaypoint(index, results.first);
       return;
     }
-
-    // Show picker
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF111111),
@@ -1088,15 +841,13 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
         separatorBuilder: (_, __) =>
             Divider(color: Colors.white.withOpacity(0.05), height: 1),
         itemBuilder: (ctx, i) => ListTile(
-          leading:
-              const Icon(Icons.location_on_rounded, color: Color(0xFF2979FF)),
+          leading: const Icon(Icons.location_on_rounded, color: Color(0xFF2979FF)),
           title: Text(results[i]['name'],
               style: const TextStyle(color: Colors.white, fontSize: 13)),
           subtitle: Text(
             results[i]['full'].toString().split(',').take(2).join(','),
             style: const TextStyle(color: Colors.white38, fontSize: 11),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+            maxLines: 1, overflow: TextOverflow.ellipsis,
           ),
           onTap: () {
             Navigator.pop(ctx);
@@ -1118,149 +869,270 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
   }
 
   Future<void> _calculateRoute() async {
-    final validWaypoints = _waypoints.whereType<Waypoint>().toList();
-    if (validWaypoints.length < 2) {
+    final valid = _waypoints.whereType<Waypoint>().toList();
+    if (valid.length < 2) {
       setState(() => _error = 'Search and select at least Start and End');
       return;
     }
-
-    setState(() {
-      _isCalculating = true;
-      _error = null;
-    });
-
-    final plan = await RouteService.calculateRoute(validWaypoints);
-
+    setState(() { _isCalculating = true; _error = null; });
+    final plan = await RouteService.calculateRoute(
+      valid,
+      avoidTolls: _avoidTolls,
+      avoidHighways: _avoidHighways,
+    );
     if (!mounted) return;
     setState(() => _isCalculating = false);
-
     if (plan == null) {
-      setState(() => _error = 'Could not calculate route. Check your connection.');
+      setState(() => _error = 'Could not calculate route. Check connection.');
       return;
     }
-
     final h = plan.durationMinutes ~/ 60;
     final m = plan.durationMinutes % 60;
     final timeStr = h > 0 ? '${h}h ${m}m' : '${m}m';
-    setState(() =>
-        _routeInfo = '${plan.distanceKm.toStringAsFixed(1)} km  ·  $timeStr');
-
-    // Fetch weather at destination in background
-    final dest = validWaypoints.last.position;
-    final weather = await WeatherService.fetchWeather(
-        dest.latitude, dest.longitude);
+    setState(() {
+      _routeInfo = '${plan.distanceKm.toStringAsFixed(1)} km  ·  $timeStr';
+      _segments = plan.segments;
+    });
+    // Weather at destination
+    final dest = valid.last.position;
+    final weather = await WeatherService.fetchWeather(dest.latitude, dest.longitude);
     if (mounted && weather != null) {
-      setState(() =>
-          _destWeather = '${weather.emoji} ${weather.tempC.round()}°C · ${weather.ridingCondition}');
+      setState(() => _destWeather =
+          '${weather.emoji} ${weather.tempC.round()}°C · ${weather.ridingCondition}');
     }
+  }
+
+  Future<void> _saveCurrentRoute() async {
+    final valid = _waypoints.whereType<Waypoint>().toList();
+    if (RouteService.activePlan == null || valid.length < 2) return;
+    final plan = RouteService.activePlan!;
+    final name = valid.map((w) => w.label.split(',').first).take(2).join(' → ');
+    final route = SavedRoute(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name,
+      waypoints: valid,
+      distanceKm: plan.distanceKm,
+      durationMinutes: plan.durationMinutes,
+      savedAt: DateTime.now(),
+    );
+    await RouteService.saveRoute(route);
+    await _loadSaved();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Route saved'),
+          backgroundColor: Color(0xFF1A1A1A),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  void _loadSavedRoute(SavedRoute route) {
+    // Clear existing waypoints
+    for (final c in _controllers) c.dispose();
+    _controllers.clear();
+    _waypoints.clear();
+    for (final w in route.waypoints) {
+      _controllers.add(TextEditingController(text: w.label));
+      _waypoints.add(w);
+    }
+    setState(() { _showSaved = false; _routeInfo = null; _segments = []; });
   }
 
   @override
   Widget build(BuildContext context) {
-    final labels = ['Start', ...List.generate(_controllers.length - 2, (i) => 'Stop ${i + 1}'), 'End'];
+    final labels = [
+      'Start',
+      ...List.generate(_controllers.length - 2, (i) => 'Stop ${i + 1}'),
+      'End',
+    ];
 
     return Padding(
-      padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.88,
+        ),
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
         decoration: const BoxDecoration(
           color: Color(0xFF111111),
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Handle
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
             Center(
               child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                      color: Colors.white12,
-                      borderRadius: BorderRadius.circular(2))),
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                    color: Colors.white12, borderRadius: BorderRadius.circular(2)),
+              ),
             ),
             const SizedBox(height: 20),
 
-            Row(
-              children: [
-                const Text('PLAN ROUTE',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w300)),
-                const Spacer(),
-                if (RouteService.hasRoute)
-                  GestureDetector(
-                    onTap: () {
-                      RouteService.clearRoute();
-                      widget.onRouteSet();
-                      Navigator.pop(context);
-                    },
-                    child: const Text('Clear',
-                        style: TextStyle(
-                            color: Color(0xFFE8003D), fontSize: 13)),
+            // Header
+            Row(children: [
+              const Text('PLAN ROUTE',
+                  style: TextStyle(color: Colors.white, fontSize: 16,
+                      fontWeight: FontWeight.w300)),
+              const Spacer(),
+              // Saved toggle
+              GestureDetector(
+                onTap: () => setState(() => _showSaved = !_showSaved),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: _showSaved
+                        ? const Color(0xFF2979FF).withOpacity(0.15)
+                        : const Color(0xFF1A1A1A),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: _showSaved
+                            ? const Color(0xFF2979FF).withOpacity(0.4)
+                            : Colors.white12),
                   ),
+                  child: Row(children: [
+                    Icon(Icons.bookmark_rounded,
+                        size: 13,
+                        color: _showSaved ? const Color(0xFF2979FF) : Colors.white38),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Saved${_savedRoutes.isNotEmpty ? ' (${_savedRoutes.length})' : ''}',
+                      style: TextStyle(
+                          color: _showSaved ? const Color(0xFF2979FF) : Colors.white30,
+                          fontSize: 11),
+                    ),
+                  ]),
+                ),
+              ),
+              if (RouteService.hasRoute) ...[
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () {
+                    RouteService.clearRoute();
+                    widget.onRouteSet();
+                    Navigator.pop(context);
+                  },
+                  child: const Text('Clear',
+                      style: TextStyle(color: Color(0xFFE8003D), fontSize: 13)),
+                ),
               ],
-            ),
+            ]),
+
+            // Saved routes panel
+            if (_showSaved) ...[
+              const SizedBox(height: 16),
+              if (_savedRoutes.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('No saved routes yet',
+                      style: TextStyle(color: Colors.white30, fontSize: 13)),
+                )
+              else
+                ..._savedRoutes.map((r) => Dismissible(
+                  key: Key(r.id),
+                  direction: DismissDirection.endToStart,
+                  onDismissed: (_) async {
+                    await RouteService.deleteSavedRoute(r.id);
+                    await _loadSaved();
+                  },
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 12),
+                    child: const Icon(Icons.delete_outline,
+                        color: Color(0xFFE8003D), size: 18),
+                  ),
+                  child: GestureDetector(
+                    onTap: () => _loadSavedRoute(r),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A1A1A),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white.withOpacity(0.06)),
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.route_rounded,
+                            color: Color(0xFF2979FF), size: 16),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(r.name,
+                                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                                Text(
+                                  '${r.distanceKm.toStringAsFixed(1)} km  ·  '
+                                  '${r.durationMinutes < 60 ? '${r.durationMinutes}m' : '${r.durationMinutes ~/ 60}h ${r.durationMinutes % 60}m'}',
+                                  style: const TextStyle(
+                                      color: Colors.white30, fontSize: 11),
+                                ),
+                              ]),
+                        ),
+                        const Icon(Icons.arrow_forward_ios_rounded,
+                            color: Colors.white24, size: 12),
+                      ]),
+                    ),
+                  ),
+                )),
+              const Divider(color: Colors.white12, height: 24),
+            ],
+
             const SizedBox(height: 4),
             const Text('Enter addresses and tap the arrow to search',
                 style: TextStyle(color: Colors.white30, fontSize: 12)),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
 
-            // Waypoints
-            ...List.generate(_controllers.length, (i) {
-              final isFirst = i == 0;
-              final isLast = i == _controllers.length - 1;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  children: [
-                    // Dot indicator
-                    Column(
-                      children: [
-                        Container(
-                          width: 28,
-                          height: 28,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
+            // Waypoints (reorderable)
+            ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _controllers.length,
+              onReorder: (oldIndex, newIndex) {
+                setState(() {
+                  if (newIndex > oldIndex) newIndex--;
+                  final ctrl = _controllers.removeAt(oldIndex);
+                  _controllers.insert(newIndex, ctrl);
+                  final wp = _waypoints.removeAt(oldIndex);
+                  _waypoints.insert(newIndex, wp);
+                });
+              },
+              itemBuilder: (_, i) {
+                final isFirst = i == 0;
+                final isLast = i == _controllers.length - 1;
+                return Padding(
+                  key: ValueKey('wp_$i'),
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(children: [
+                    Container(
+                      width: 28, height: 28,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _waypoints[i] != null
+                            ? const Color(0xFF2979FF) : const Color(0xFF1A1A1A),
+                        border: Border.all(
                             color: _waypoints[i] != null
-                                ? const Color(0xFF2979FF)
-                                : const Color(0xFF1A1A1A),
-                            border: Border.all(
-                                color: _waypoints[i] != null
-                                    ? const Color(0xFF2979FF)
-                                    : Colors.white24),
-                          ),
-                          child: Center(
-                            child: Text(
-                              isFirst
-                                  ? 'A'
-                                  : isLast
-                                      ? 'B'
-                                      : '$i',
-                              style: TextStyle(
-                                  color: _waypoints[i] != null
-                                      ? Colors.white
-                                      : Colors.white38,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700),
-                            ),
-                          ),
+                                ? const Color(0xFF2979FF) : Colors.white24),
+                      ),
+                      child: Center(
+                        child: Text(
+                          isFirst ? 'A' : isLast ? 'B' : '$i',
+                          style: TextStyle(
+                              color: _waypoints[i] != null ? Colors.white : Colors.white38,
+                              fontSize: 11, fontWeight: FontWeight.w700),
                         ),
-                      ],
+                      ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: TextField(
                         controller: _controllers[i],
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 13),
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
                         decoration: InputDecoration(
                           hintText: labels[i],
-                          hintStyle: const TextStyle(
-                              color: Colors.white24, fontSize: 13),
+                          hintStyle: const TextStyle(color: Colors.white24, fontSize: 13),
                           filled: true,
                           fillColor: const Color(0xFF1A1A1A),
                           border: OutlineInputBorder(
@@ -1278,7 +1150,6 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
                         onSubmitted: (_) => _searchAndSet(i),
                       ),
                     ),
-                    // Remove stop button
                     if (!isFirst && !isLast && _controllers.length > 2)
                       GestureDetector(
                         onTap: () => _removeStop(i),
@@ -1288,142 +1159,211 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
                               color: Colors.white24, size: 18),
                         ),
                       ),
-                  ],
-                ),
-              );
-            }),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.drag_handle_rounded,
+                        color: Colors.white12, size: 18),
+                  ]),
+                );
+              },
+            ),
 
             // Add stop
             if (_controllers.length < 6)
               GestureDetector(
                 onTap: _addStop,
                 child: Padding(
-                  padding: const EdgeInsets.only(left: 38, bottom: 16),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.add_circle_outline_rounded,
-                          color: Color(0xFF2979FF), size: 16),
-                      const SizedBox(width: 6),
-                      Text('Add stop',
-                          style: TextStyle(
-                              color: const Color(0xFF2979FF)
-                                  .withOpacity(0.8),
-                              fontSize: 13)),
-                    ],
-                  ),
+                  padding: const EdgeInsets.only(left: 38, bottom: 12),
+                  child: Row(children: [
+                    const Icon(Icons.add_circle_outline_rounded,
+                        color: Color(0xFF2979FF), size: 16),
+                    const SizedBox(width: 6),
+                    Text('Add stop',
+                        style: TextStyle(
+                            color: const Color(0xFF2979FF).withOpacity(0.8),
+                            fontSize: 13)),
+                  ]),
                 ),
               ),
+
+            // Avoid options
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(children: [
+                const Icon(Icons.tune_rounded, color: Colors.white24, size: 16),
+                const SizedBox(width: 10),
+                const Text('Avoid tolls',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                const SizedBox(width: 4),
+                Transform.scale(
+                  scale: 0.75,
+                  child: Switch(
+                    value: _avoidTolls,
+                    onChanged: (v) => setState(() => _avoidTolls = v),
+                    activeColor: const Color(0xFF2979FF),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text('Highways',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                Transform.scale(
+                  scale: 0.75,
+                  child: Switch(
+                    value: _avoidHighways,
+                    onChanged: (v) => setState(() => _avoidHighways = v),
+                    activeColor: const Color(0xFF2979FF),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ]),
+            ),
 
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(_error!,
-                    style: const TextStyle(
-                        color: Color(0xFFE8003D), fontSize: 12)),
+                    style: const TextStyle(color: Color(0xFFE8003D), fontSize: 12)),
               ),
 
+            // Route result card
             if (_routeInfo != null)
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 margin: const EdgeInsets.only(bottom: 12),
                 decoration: BoxDecoration(
                   color: const Color(0xFF2979FF).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                      color: const Color(0xFF2979FF).withOpacity(0.3)),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF2979FF).withOpacity(0.3)),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.route_rounded,
-                            color: Color(0xFF2979FF), size: 16),
-                        const SizedBox(width: 8),
-                        Text(_routeInfo!,
-                            style: const TextStyle(
-                                color: Color(0xFF2979FF), fontSize: 13)),
-                      ],
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    const Icon(Icons.route_rounded, color: Color(0xFF2979FF), size: 16),
+                    const SizedBox(width: 8),
+                    Text(_routeInfo!,
+                        style: const TextStyle(color: Color(0xFF2979FF), fontSize: 14,
+                            fontWeight: FontWeight.w500)),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: _saveCurrentRoute,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2979FF).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Row(children: [
+                          Icon(Icons.bookmark_add_rounded,
+                              color: Color(0xFF2979FF), size: 12),
+                          SizedBox(width: 4),
+                          Text('Save', style: TextStyle(color: Color(0xFF2979FF), fontSize: 11)),
+                        ]),
+                      ),
                     ),
-                    if (_destWeather != null) ...[
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          const Icon(Icons.location_on_rounded,
-                              color: Colors.white30, size: 14),
-                          const SizedBox(width: 6),
+                  ]),
+
+                  // Per-segment breakdown
+                  if (_segments.length > 1) ...[
+                    const SizedBox(height: 10),
+                    ..._segments.asMap().entries.map((e) {
+                      final seg = e.value;
+                      final h = seg.durationMinutes ~/ 60;
+                      final m = seg.durationMinutes % 60;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(children: [
+                          Container(
+                            width: 18, height: 18,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: const Color(0xFF2979FF).withOpacity(0.2),
+                            ),
+                            child: Center(
+                              child: Text('${e.key + 1}',
+                                  style: const TextStyle(
+                                      color: Color(0xFF2979FF), fontSize: 9,
+                                      fontWeight: FontWeight.w700)),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${seg.fromLabel.split(',').first} → ${seg.toLabel.split(',').first}',
+                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                           Text(
-                            'Destination: $_destWeather',
-                            style: const TextStyle(
-                                color: Colors.white54, fontSize: 12),
+                            '${seg.distanceKm.toStringAsFixed(1)} km  '
+                            '${h > 0 ? '${h}h ' : ''}${m}m',
+                            style: const TextStyle(color: Colors.white38, fontSize: 11),
                           ),
-                        ],
-                      ),
-                    ] else if (_routeInfo != null) ...[
-                      const SizedBox(height: 6),
-                      const Row(
-                        children: [
-                          SizedBox(
-                            width: 10,
-                            height: 10,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 1.5,
-                                color: Colors.white24),
-                          ),
-                          SizedBox(width: 8),
-                          Text('Fetching destination weather…',
-                              style: TextStyle(
-                                  color: Colors.white24, fontSize: 11)),
-                        ],
-                      ),
-                    ],
+                        ]),
+                      );
+                    }),
                   ],
-                ),
+
+                  if (_destWeather != null) ...[
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      const Icon(Icons.location_on_rounded,
+                          color: Colors.white30, size: 14),
+                      const SizedBox(width: 6),
+                      Text('Destination: $_destWeather',
+                          style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    ]),
+                  ] else ...[
+                    const SizedBox(height: 6),
+                    const Row(children: [
+                      SizedBox(
+                        width: 10, height: 10,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 1.5, color: Colors.white24),
+                      ),
+                      SizedBox(width: 8),
+                      Text('Fetching destination weather…',
+                          style: TextStyle(color: Colors.white24, fontSize: 11)),
+                    ]),
+                  ],
+                ]),
               ),
 
-            // Calculate / Done button
+            // Action button
             GestureDetector(
               onTap: _isCalculating
                   ? null
                   : (_routeInfo != null
-                      ? () {
-                          widget.onRouteSet();
-                          Navigator.pop(context);
-                        }
+                      ? () { widget.onRouteSet(); Navigator.pop(context); }
                       : _calculateRoute),
               child: Container(
                 width: double.infinity,
                 height: 52,
                 decoration: BoxDecoration(
                   color: _isCalculating
-                      ? const Color(0xFF1A1A1A)
-                      : const Color(0xFF2979FF),
+                      ? const Color(0xFF1A1A1A) : const Color(0xFF2979FF),
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Center(
                   child: _isCalculating
                       ? const SizedBox(
-                          width: 20,
-                          height: 20,
+                          width: 20, height: 20,
                           child: CircularProgressIndicator(
                               strokeWidth: 1.5, color: Colors.white54))
                       : Text(
-                          _routeInfo != null
-                              ? 'SHOW ON MAP'
-                              : 'CALCULATE ROUTE',
+                          _routeInfo != null ? 'SHOW ON MAP' : 'CALCULATE ROUTE',
                           style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 2,
-                            fontSize: 12,
-                          ),
+                              color: Colors.white, fontWeight: FontWeight.w700,
+                              letterSpacing: 2, fontSize: 12),
                         ),
                 ),
               ),
             ),
-          ],
+          ]),
         ),
       ),
     );
