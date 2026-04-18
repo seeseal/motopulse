@@ -12,6 +12,9 @@ import 'maintenance_screen.dart';
 import 'sos_screen.dart';
 import 'group_ride_screen.dart';
 import 'speedometer_screen.dart';
+import 'document_vault_screen.dart';
+import '../services/document_service.dart';
+import '../models/document_model.dart';
 
 class DashboardScreen extends StatefulWidget {
   final VoidCallback? onStartRide;
@@ -35,6 +38,8 @@ class _DashboardScreenState extends State<DashboardScreen>
   WeatherData? _weather;
   int _overdueCount = 0;
   int _dueSoonCount = 0;
+  int _docCount = 0;
+  int _docAlertCount = 0;
 
   late AnimationController _fadeController;
   late Animation<double> _fadeAnim;
@@ -82,6 +87,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
     _fetchWeather();
     _fetchMaintenance();
+    _fetchDocs();
   }
 
   Future<void> _fetchMaintenance() async {
@@ -92,6 +98,16 @@ class _DashboardScreenState extends State<DashboardScreen>
     setState(() {
       _overdueCount = items.where((i) => i.isOverdue(odo)).length;
       _dueSoonCount = items.where((i) => !i.isOverdue(odo) && i.duePct(odo) >= 0.8).length;
+    });
+  }
+
+  Future<void> _fetchDocs() async {
+    final docs = await DocumentService.loadDocs();
+    if (!mounted) return;
+    setState(() {
+      _docCount = docs.length;
+      _docAlertCount =
+          docs.where((d) => d.isExpired || d.isExpiringSoon).length;
     });
   }
 
@@ -394,6 +410,27 @@ class _DashboardScreenState extends State<DashboardScreen>
                             onTap: () => Navigator.push(context,
                                 MaterialPageRoute(builder: (_) => const MaintenanceScreen()))
                                 .then((_) => _fetchMaintenance()),
+                          )),
+                        ]),
+                        const SizedBox(height: 10),
+                        // Documents — full-width tile
+                        Row(children: [
+                          Expanded(child: _actionTile(
+                            icon: Icons.folder_special_rounded,
+                            label: 'Documents',
+                            sublabel: _docAlertCount > 0
+                                ? '$_docAlertCount need attention'
+                                : _docCount > 0
+                                    ? '$_docCount stored · All good'
+                                    : 'Insurance, reg & more',
+                            color: _docAlertCount > 0
+                                ? const Color(0xFFFFD700)
+                                : const Color(0xFF00BCD4),
+                            onTap: () => Navigator.push(context,
+                                MaterialPageRoute(
+                                    builder: (_) =>
+                                        const DocumentVaultScreen()))
+                                .then((_) => _fetchDocs()),
                           )),
                         ]),
                       ]),
