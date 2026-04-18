@@ -12,9 +12,9 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
-}
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
 
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_17.toString()
@@ -36,6 +36,9 @@ android {
         jniLibs {
             // Required for 16KB page-size compatibility on Android 15+
             useLegacyPackaging = false
+            // Force-exclude x86_64 libs that sneak in via ML Kit / Firebase AARs
+            // (libbarhopper_v3.so, libdatastore_shared_counter.so, etc.)
+            excludes += setOf("lib/x86_64/**")
         }
     }
 
