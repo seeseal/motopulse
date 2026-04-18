@@ -1,7 +1,6 @@
 plugins {
     id("com.android.application")
     id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services")
 }
@@ -26,7 +25,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        // Only include ARM ABIs — x86_64 is emulator-only and causes 16KB alignment warnings
+        // Only include ARM ABIs for release; emulator (x86_64) uses debug builds
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -36,18 +35,21 @@ android {
         jniLibs {
             // Required for 16KB page-size compatibility on Android 15+
             useLegacyPackaging = false
-            // Force-exclude x86_64 libs that sneak in via ML Kit / Firebase AARs
-            // (libbarhopper_v3.so, libdatastore_shared_counter.so, etc.)
-            excludes += setOf("lib/x86_64/**")
         }
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+}
+
+// Exclude x86_64 JNI libs ONLY in release builds.
+// Debug builds keep x86_64 so the emulator can run the app.
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.packaging.jniLibs.excludes.add("lib/x86_64/**")
     }
 }
 
