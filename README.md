@@ -4,7 +4,7 @@ A dark, full-featured riding companion app for motorcyclists. Built with Flutter
 
 ## Download
 
-**[MotoPulse-v1.0.0.apk](https://github.com/seeseal/motopulse/releases/download/v1.0.0/MotoPulse-v1.0.0.apk)** — sideload directly on any Android device.
+**[MotoPulse-v1.1.0.apk](https://github.com/seeseal/motopulse/releases/download/v1.1.0/MotoPulse-v1.1.0.apk)** — sideload directly on any Android device (arm64).
 
 ---
 
@@ -20,7 +20,7 @@ A dark, full-featured riding companion app for motorcyclists. Built with Flutter
 
 ### Ride Tracking
 - Real-time GPS with live speed, distance, and duration
-- Ridden route drawn on a dark map
+- Ridden route drawn live on a dark Google Map
 - Speed alert — configurable threshold, flashes red banner + haptic
 - Ride saved automatically on stop with full stats (avg speed, max speed, distance, time)
 - Anti-ghost filter — discards rides under 5 seconds or 50 m
@@ -30,34 +30,39 @@ A dark, full-featured riding companion app for motorcyclists. Built with Flutter
 - Accelerometer-based crash detection during active rides
 - Auto-triggers SOS alert if a sudden impact is detected
 
+### Ride History
+- Every completed ride stored locally with full route replay on a dark Google Map mini-map
+- Stats per ride: duration, avg speed, max speed, distance
+- Swipe to delete individual rides or clear all
+
 ### Document Vault
-- Store insurance, registration, license, PUC, fitness certificate, and other docs
+- Store insurance, registration, license, PUC, fitness certificate, and custom docs
 - Photo capture or gallery import per document
-- Expiry tracking with colour-coded badges (green / amber expiring soon / red expired)
+- Expiry tracking with colour-coded badges (green / amber / red)
 - Dashboard alert badge when documents need attention
 - Filter by document type, long-press to delete
 
 ### Route Planner
-- Search any address and add multiple stops
-- Route calculated and displayed on map
-- Add / remove waypoints
+- Search any address and add multiple waypoints
+- Route calculated and drawn on a dark Google Map
+- Add / remove / reorder stops
 
 ### Group Ride
 - Create or join a session with a 6-character room code
-- See all riders' live positions on the map in real time (Firebase Firestore)
+- See all riders' live positions on a dark Google Map in real time (Firebase Firestore)
 - Quick alerts — ⛽ Need fuel, 🐢 Slowing down, 🅿️ Pull over ahead, ✅ All good, ⚠️ Hazard, 🚔 Police ahead
-- Live alert feed shows who sent what
+- Live alert feed shows who sent what and when
 
 ### SOS
-- One-tap SOS with pulsing animation
-- Broadcasts exact GPS to every rider in the group instantly
-- Other riders see a full-screen red overlay with your location and Go to Location button
+- One-tap SOS with pulsing red animation
+- Broadcasts exact GPS coordinates to every rider in the group instantly
+- Other riders see a full-screen red overlay with your location and a Go to Location button
 - Emergency QR code — blood type, allergies, emergency contact, bike details — for first responders
 
 ### Maintenance Tracker
-- Log service entries (oil change, tyre, brakes, etc.)
+- Log service entries (oil change, tyre, brakes, chain, etc.)
 - Odometer-based reminders
-- Service history per bike
+- Full service history per bike
 
 ### Profile
 - Rider name, avatar, blood type, allergies
@@ -67,15 +72,15 @@ A dark, full-featured riding companion app for motorcyclists. Built with Flutter
 - Live QR emergency card preview
 
 ### Stats & Achievements
-- Total distance, ride time, top speed
+- Total distance, ride time, top speed across all rides
 - Weekly distance bar chart
 - Achievements — First Ride, Road Warrior, Speed Demon, and more
 
 ### Dashboard
 - Live weather (temperature, wind, riding advice) via Open-Meteo
 - Quick stats — total km, this week, total rides
-- Documents alert tile
-- Recent ride history
+- Document expiry alert tile
+- Recent ride summary
 
 ---
 
@@ -84,10 +89,10 @@ A dark, full-featured riding companion app for motorcyclists. Built with Flutter
 | Layer | Choice |
 |---|---|
 | Framework | Flutter (Dart) |
-| Maps | flutter_map + CartoDB dark tiles |
+| Maps | Google Maps SDK for Android (`google_maps_flutter`) |
 | Routing | OSRM (open source) |
 | Geocoding | Nominatim (OpenStreetMap) |
-| Weather | Open-Meteo (no key required) |
+| Weather | Open-Meteo (no API key required) |
 | Backend | Firebase Firestore |
 | Auth | Firebase Anonymous Auth |
 | Local storage | SharedPreferences |
@@ -103,6 +108,7 @@ A dark, full-featured riding companion app for motorcyclists. Built with Flutter
 - Flutter SDK 3.x
 - Android Studio or VS Code with Flutter plugin
 - A Firebase project (free Spark plan works)
+- A Google Maps API key with **Maps SDK for Android** enabled
 
 ### Setup
 
@@ -112,10 +118,18 @@ cd motopulse
 flutter pub get
 ```
 
-Firebase — place your `google-services.json` in `android/app/` and update `lib/firebase_options.dart` with your project values (Firestore + Anonymous Auth enabled).
+**Firebase** — place your `google-services.json` in `android/app/` and update `lib/firebase_options.dart` with your project values (Firestore + Anonymous Auth enabled).
+
+**Google Maps** — add your API key to `android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<meta-data
+    android:name="com.google.android.geo.API_KEY"
+    android:value="YOUR_API_KEY_HERE"/>
+```
 
 ```bash
-flutter build apk --release --target-platform android-arm,android-arm64
+flutter build apk --release --target-platform android-arm64
 ```
 
 Output: `build/app/outputs/flutter-apk/app-release.apk`
@@ -131,6 +145,19 @@ group_rides/
     sos/      → name, emoji, lat, lng, active, triggeredAt
     alerts/   → name, emoji, alertEmoji, message, sentAt
 ```
+
+---
+
+## Changelog
+
+### v1.1.0 — Google Maps Edition
+- Migrated all maps from flutter_map (OpenStreetMap) to Google Maps SDK
+- Dark map style applied across ride tracking, route planner, group ride, and ride history mini-maps
+- Ride history cards now show a live Google Maps mini-map of each route
+- ARM64-only release build (smaller APK, no x86_64 bloat)
+
+### v1.0.0 — Initial Release
+- Full feature set: HUD speedometer, ride tracking, crash detection, group ride, SOS, document vault, maintenance tracker
 
 ---
 
