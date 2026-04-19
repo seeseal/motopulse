@@ -14,7 +14,6 @@ import '../services/crash_detector.dart';
 import '../widgets/crash_alert_overlay.dart';
 import '../widgets/glass_card.dart';
 import 'group_ride_screen.dart';
-import 'speedometer_screen.dart';
 
 const String _kDarkMapStyle = '''[
   {"elementType":"geometry","stylers":[{"color":"#141414"}]},
@@ -608,44 +607,6 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                         ),
                       ),
 
-                    const SizedBox(height: 10),
-
-                    GestureDetector(
-                      onTap: () => Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => const SpeedometerScreen())),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF111111),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.white.withOpacity(0.08)),
-                        ),
-                        child: Row(children: [
-                          Container(
-                            width: 32, height: 32,
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.05),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(Icons.speed_rounded,
-                                color: Colors.white54, size: 16),
-                          ),
-                          const SizedBox(width: 12),
-                          const Expanded(
-                            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Speedometer',
-                                      style: TextStyle(color: Colors.white, fontSize: 13,
-                                          fontWeight: FontWeight.w500)),
-                                  Text('Full-screen analogue dial',
-                                      style: TextStyle(color: Colors.white30, fontSize: 11)),
-                                ]),
-                          ),
-                          const Icon(Icons.arrow_forward_ios_rounded,
-                              color: Colors.white24, size: 14),
-                        ]),
-                      ),
-                    ),
 
                     const SizedBox(height: 10),
 

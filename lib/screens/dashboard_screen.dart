@@ -13,7 +13,6 @@ import 'ride_history_screen.dart';
 import 'maintenance_screen.dart';
 import 'sos_screen.dart';
 import 'group_ride_screen.dart';
-import 'speedometer_screen.dart';
 import 'document_vault_screen.dart';
 import '../services/document_service.dart';
 import '../models/document_model.dart';
@@ -404,34 +403,23 @@ class _DashboardScreenState extends State<DashboardScreen>
                           )),
                         ]),
                         const SizedBox(height: 10),
-                        Row(children: [
-                          Expanded(child: _actionTile(
-                            icon: Icons.speed_rounded,
-                            label: 'Speedometer',
-                            sublabel: 'Full-screen dial',
-                            color: const Color(0xFFFF6B00),
-                            onTap: () => Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => const SpeedometerScreen())),
-                          )),
-                          const SizedBox(width: 10),
-                          Expanded(child: _actionTile(
-                            icon: Icons.build_rounded,
-                            label: 'Maintenance',
-                            sublabel: _overdueCount > 0
-                                ? '$_overdueCount overdue'
-                                : _dueSoonCount > 0
-                                    ? '$_dueSoonCount due soon'
-                                    : 'All good',
-                            color: _overdueCount > 0
-                                ? const Color(0xFFE8003D)
-                                : _dueSoonCount > 0
-                                    ? const Color(0xFFFFD700)
-                                    : const Color(0xFF00C853),
-                            onTap: () => Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => const MaintenanceScreen()))
-                                .then((_) => _fetchMaintenance()),
-                          )),
-                        ]),
+                        _actionTile(
+                          icon: Icons.build_rounded,
+                          label: 'Maintenance',
+                          sublabel: _overdueCount > 0
+                              ? '$_overdueCount overdue'
+                              : _dueSoonCount > 0
+                                  ? '$_dueSoonCount due soon'
+                                  : 'All good',
+                          color: _overdueCount > 0
+                              ? const Color(0xFFE8003D)
+                              : _dueSoonCount > 0
+                                  ? const Color(0xFFFFD700)
+                                  : const Color(0xFF00C853),
+                          onTap: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const MaintenanceScreen()))
+                              .then((_) => _fetchMaintenance()),
+                        ),
                         const SizedBox(height: 10),
                         // Documents — full-width tile
                         Row(children: [
