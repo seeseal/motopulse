@@ -69,3 +69,7 @@ service_account_key.json
 # macOS
 .DS_Store
 **/.DS_Store
+
+# Temp files
+commitmsg.txt
+upload_apk.ps1
