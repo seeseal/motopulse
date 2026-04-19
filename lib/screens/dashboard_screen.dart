@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -5,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/ride_model.dart';
 import '../services/weather_service.dart';
 import '../services/maintenance_service.dart';
+import '../services/ride_service.dart';
 import '../models/maintenance_model.dart';
 import '../widgets/glass_card.dart';
 import 'ride_history_screen.dart';
@@ -43,6 +45,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   late AnimationController _fadeController;
   late Animation<double> _fadeAnim;
+  StreamSubscription<void>? _rideSub;
 
   final List<Map<String, dynamic>> _avatars = [
     {'emoji': '🏍️', 'color': const Color(0xFFE8003D)},
@@ -61,11 +64,15 @@ class _DashboardScreenState extends State<DashboardScreen>
       duration: const Duration(milliseconds: 600),
     )..forward();
     _fadeAnim = CurvedAnimation(parent: _fadeController, curve: Curves.easeOut);
+    _rideSub = RideService.onChange.listen((_) {
+      if (mounted) setState(() {});
+    });
     _loadData();
   }
 
   @override
   void dispose() {
+    _rideSub?.cancel();
     _fadeController.dispose();
     super.dispose();
   }
@@ -238,73 +245,104 @@ class _DashboardScreenState extends State<DashboardScreen>
 
                   const SliverToBoxAdapter(child: SizedBox(height: 20)),
 
-                  // ── Hero START RIDE ───────────────────────────────────────
+                  // ── Hero START RIDE / ONGOING RIDE ───────────────────────
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 22),
                       child: GestureDetector(
                         onTap: widget.onStartRide,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(22),
-                          child: Container(
-                            height: 80,
-                            decoration: const BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Color(0xFFE8003D), Color(0xFFB5002F)],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                            ),
-                            child: Stack(children: [
-                              // Subtle speed-line decoration
-                              Positioned(
-                                right: -20, top: -20,
-                                child: Opacity(
-                                  opacity: 0.08,
-                                  child: Container(
-                                    width: 140, height: 140,
-                                    decoration: const BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: Colors.white,
-                                    ),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          height: 80,
+                          decoration: BoxDecoration(
+                            gradient: RideService.isRiding
+                                ? const LinearGradient(
+                                    colors: [Color(0xFF0D0D0D), Color(0xFF1A0A0A)],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  )
+                                : const LinearGradient(
+                                    colors: [Color(0xFFE8003D), Color(0xFFB5002F)],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                            borderRadius: BorderRadius.circular(22),
+                            border: RideService.isRiding
+                                ? Border.all(color: const Color(0xFFE8003D), width: 1.5)
+                                : null,
+                            boxShadow: RideService.isRiding
+                                ? [BoxShadow(
+                                    color: const Color(0xFFE8003D).withOpacity(0.3),
+                                    blurRadius: 12, spreadRadius: 0)]
+                                : [],
+                          ),
+                          child: Stack(children: [
+                            Positioned(
+                              right: -20, top: -20,
+                              child: Opacity(
+                                opacity: 0.08,
+                                child: Container(
+                                  width: 140, height: 140,
+                                  decoration: const BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.white,
                                   ),
                                 ),
                               ),
-                              Center(
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Container(
-                                      width: 40, height: 40,
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.15),
-                                        shape: BoxShape.circle,
+                            ),
+                            Center(
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    width: 40, height: 40,
+                                    decoration: BoxDecoration(
+                                      color: RideService.isRiding
+                                          ? const Color(0xFFE8003D).withOpacity(0.15)
+                                          : Colors.white.withOpacity(0.15),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      RideService.isRiding
+                                          ? Icons.radio_button_checked_rounded
+                                          : Icons.play_arrow_rounded,
+                                      color: RideService.isRiding
+                                          ? const Color(0xFFE8003D)
+                                          : Colors.white,
+                                      size: 24,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        RideService.isRiding ? 'ONGOING RIDE' : 'START RIDE',
+                                        style: TextStyle(
+                                          color: RideService.isRiding
+                                              ? const Color(0xFFE8003D)
+                                              : Colors.white,
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: 2,
+                                        ),
                                       ),
-                                      child: const Icon(Icons.play_arrow_rounded,
-                                          color: Colors.white, size: 24),
-                                    ),
-                                    const SizedBox(width: 14),
-                                    const Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text('START RIDE',
-                                            style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 18,
-                                                fontWeight: FontWeight.w800,
-                                                letterSpacing: 2)),
-                                        Text('Track your journey',
-                                            style: TextStyle(
-                                                color: Colors.white60,
-                                                fontSize: 11)),
-                                      ],
-                                    ),
-                                  ],
-                                ),
+                                      Text(
+                                        RideService.isRiding
+                                            ? '${RideService.formattedTime}  ·  ${RideService.distanceKm.toStringAsFixed(1)} km'
+                                            : 'Track your journey',
+                                        style: const TextStyle(
+                                          color: Colors.white60,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
-                            ]),
-                          ),
+                            ),
+                          ]),
                         ),
                       ),
                     ),
