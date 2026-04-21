@@ -79,10 +79,13 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   // Map
   gmaps.GoogleMapController? _mapController;
   LatLng _currentLatLng = const LatLng(3.1390, 101.6869);
+  LatLng _displayLatLng = const LatLng(3.1390, 101.6869); // smoothed position
   bool _locationReady = false;
   bool _trafficEnabled = false;
+  bool _headingUp = true; // navigation (heading-up) vs north-up
   gmaps.BitmapDescriptor? _bikeMarker;
   LatLng? _rideStartPos;
+  Timer? _interpTimer;
 
   // Profile-driven settings
   double _speedLimitKmh = 100.0;
@@ -118,6 +121,20 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     });
     _iconToBitmap(Icons.two_wheeler_rounded, const Color(0xFFE8003D), 56)
         .then((bmp) { if (mounted) setState(() => _bikeMarker = bmp); });
+
+    // Smooth marker interpolation at 20 fps
+    _interpTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted || !RideService.isRiding) return;
+      final target = _currentLatLng;
+      final curr = _displayLatLng;
+      const alpha = 0.25;
+      final lat = curr.latitude + (target.latitude - curr.latitude) * alpha;
+      final lng = curr.longitude + (target.longitude - curr.longitude) * alpha;
+      if ((lat - curr.latitude).abs() > 1e-7 ||
+          (lng - curr.longitude).abs() > 1e-7) {
+        setState(() => _displayLatLng = LatLng(lat, lng));
+      }
+    });
     _crashSub = CrashDetector.onCrashDetected.listen((_) {
       if (!mounted) return;
       Navigator.of(context).push(PageRouteBuilder(
@@ -134,11 +151,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       final pts = RideService.routePoints;
       if (pts.isNotEmpty) {
         _currentLatLng = pts.last;
-        if (RideService.isRiding) {
-          _mapController?.animateCamera(
-            gmaps.CameraUpdate.newLatLng(_gl(_currentLatLng)),
-          );
-        }
+        if (RideService.isRiding) _updateCamera();
       }
       final overLimit = RideService.speedKmh > _speedLimitKmh;
       if (overLimit && !_speedAlertShownOnce) {
@@ -159,6 +172,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     _pulseController.dispose();
     _rideServiceSub?.cancel();
     _crashSub?.cancel();
+    _interpTimer?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
@@ -190,13 +204,48 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     }
   }
 
+  // ── Navigation camera ──────────────────────────────────────────────────────
+
+  double _speedToZoom(double kmh) {
+    if (kmh < 10) return 17.5;
+    if (kmh < 30) return 17.0;
+    if (kmh < 60) return 16.0;
+    if (kmh < 100) return 15.5;
+    return 15.0;
+  }
+
+  void _updateCamera() {
+    if (_mapController == null) return;
+    if (_headingUp) {
+      _mapController!.animateCamera(
+        gmaps.CameraUpdate.newCameraPosition(
+          gmaps.CameraPosition(
+            target: _gl(_currentLatLng),
+            zoom: _speedToZoom(RideService.speedKmh),
+            bearing: RideService.bearing,
+            tilt: 45.0,
+          ),
+        ),
+      );
+    } else {
+      _mapController!.animateCamera(
+        gmaps.CameraUpdate.newLatLng(_gl(_currentLatLng)),
+      );
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+
   void _startRide() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       _showSnack('Please enable location services.');
       return;
     }
-    setState(() => _rideStartPos = _currentLatLng);
+    setState(() {
+      _rideStartPos = _currentLatLng;
+      _displayLatLng = _currentLatLng;
+    });
     RideService.startRide(initialPos: _locationReady ? _currentLatLng : null);
   }
 
@@ -309,10 +358,14 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         patterns: [gmaps.PatternItem.dash(12), gmaps.PatternItem.gap(6)],
       ));
     }
-    if (RideService.routePoints.length > 1) {
+    // Prefer road-snapped route; fall back to raw GPS
+    final ridePoints = RideService.snappedRoutePoints.length > 1
+        ? RideService.snappedRoutePoints
+        : RideService.routePoints;
+    if (ridePoints.length > 1) {
       result.add(gmaps.Polyline(
         polylineId: const gmaps.PolylineId('ridden'),
-        points: RideService.routePoints.map(_gl).toList(),
+        points: ridePoints.map(_gl).toList(),
         color: const Color(0xFFE8003D),
         width: 5,
       ));
@@ -335,16 +388,17 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       ));
     }
 
-    // Current position: bike icon when riding, red pin when idle
+    // Current position: bike icon (smoothed + rotated) when riding, red pin idle
     result.add(gmaps.Marker(
       markerId: const gmaps.MarkerId('me'),
-      position: _gl(_currentLatLng),
+      position: _gl(RideService.isRiding ? _displayLatLng : _currentLatLng),
       icon: RideService.isRiding && _bikeMarker != null
           ? _bikeMarker!
           : gmaps.BitmapDescriptor.defaultMarkerWithHue(
               gmaps.BitmapDescriptor.hueRed),
       anchor: const Offset(0.5, 0.5),
       flat: RideService.isRiding,
+      rotation: RideService.isRiding ? RideService.bearing : 0.0,
     ));
 
     // Waypoint markers
@@ -469,6 +523,51 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                       ]),
                     ),
                   ]),
+                ),
+              ),
+
+              // Heading-up / North-up toggle
+              Positioned(
+                right: 16, bottom: 112,
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() => _headingUp = !_headingUp);
+                    if (!_headingUp) {
+                      // Reset to north-up flat view
+                      _mapController?.animateCamera(
+                        gmaps.CameraUpdate.newCameraPosition(
+                          gmaps.CameraPosition(
+                            target: _gl(_currentLatLng),
+                            zoom: _speedToZoom(RideService.speedKmh),
+                            bearing: 0,
+                            tilt: 0,
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 40, height: 40,
+                    decoration: BoxDecoration(
+                      color: _headingUp
+                          ? const Color(0xFF2979FF).withOpacity(0.9)
+                          : const Color(0xFF111111).withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _headingUp
+                            ? const Color(0xFF2979FF).withOpacity(0.5)
+                            : Colors.white.withOpacity(0.08),
+                      ),
+                    ),
+                    child: Icon(
+                      _headingUp
+                          ? Icons.navigation_rounded
+                          : Icons.explore_rounded,
+                      color: _headingUp ? Colors.white : Colors.white54,
+                      size: 18,
+                    ),
+                  ),
                 ),
               ),
 

@@ -4,7 +4,7 @@ A dark, full-featured riding companion app for motorcyclists. Built with Flutter
 
 ## Download
 
-**[MotoPulse-v1.2.1.apk](https://github.com/seeseal/motopulse/releases/download/v1.2.1/MotoPulse-v1.2.1.apk)** — sideload directly on any Android device (arm64).
+**[MotoPulse-v1.3.0.apk](https://github.com/seeseal/motopulse/releases/download/v1.3.0/MotoPulse-v1.3.0.apk)** — sideload directly on any Android device (arm64).
 
 ---
 
@@ -149,6 +149,13 @@ group_rides/
 ---
 
 ## Changelog
+
+### v1.3.0 — Navigation Mode
+- **OSRM road snapping** — live GPS trace is snapped to actual roads every 3 seconds, eliminating path drift through buildings or fields
+- **Bike marker rotates** to face direction of travel (bearing from GPS heading)
+- **Heading-up navigation camera** — map rotates to keep your direction forward; 45° tilt for a Google Maps-style perspective view. Toggle button (🧭) to switch north-up/heading-up
+- **Speed-adaptive zoom** — automatically zooms out at higher speeds so you see more road ahead
+- **Smooth marker interpolation** — bike icon glides between GPS updates at 20 fps instead of jumping
 
 ### v1.2.1 — Ride Tracking Improvements
 - Traffic layer toggle on the ride map (tap the traffic icon to show/hide live traffic)

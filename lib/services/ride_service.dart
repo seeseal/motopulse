@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import '../models/ride_model.dart';
 import 'background_service.dart';
 import 'crash_detector.dart';
+import 'route_service.dart';
 
 /// Singleton that owns the GPS subscription and ride timer.
 /// Lives outside the widget tree so the ride survives app-switching,
@@ -22,7 +23,9 @@ class RideService {
   static int speedReadings = 0;
   static int elapsedSeconds = 0;
   static DateTime? startTime;
-  static List<LatLng> routePoints = [];
+  static List<LatLng> routePoints = [];       // raw GPS trace
+  static List<LatLng> snappedRoutePoints = []; // road-snapped display polyline
+  static double bearing = 0;                   // current heading in degrees (0=north)
   static Position? lastPosition;
 
   // ── Stream ─────────────────────────────────────────────────────────────────
@@ -33,6 +36,12 @@ class RideService {
   // ── Internal subscriptions ────────────────────────────────────────────────
   static StreamSubscription<Position>? _gpsSub;
   static Timer? _timer;
+  static Timer? _matchTimer;
+
+  // Raw GPS buffer waiting to be road-snapped
+  static final List<LatLng> _pendingRaw = [];
+  // Last few snapped points kept for overlap continuity
+  static List<LatLng> _snapOverlap = [];
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -45,13 +54,18 @@ class RideService {
     totalSpeedSum = 0;
     speedReadings = 0;
     elapsedSeconds = 0;
+    bearing = 0;
     lastPosition = null;
     startTime = DateTime.now();
     routePoints = initialPos != null ? [initialPos] : [];
+    snappedRoutePoints = initialPos != null ? [initialPos] : [];
+    _pendingRaw.clear();
+    _snapOverlap = initialPos != null ? [initialPos] : [];
 
     BackgroundService.startRideService();
     _startGPS();
     _startTimer();
+    _startMatchTimer();
     CrashDetector.startMonitoring();
     _notify();
   }
@@ -65,6 +79,8 @@ class RideService {
     _gpsSub = null;
     _timer?.cancel();
     _timer = null;
+    _matchTimer?.cancel();
+    _matchTimer = null;
     CrashDetector.stopMonitoring();
     BackgroundService.stopRideService();
 
@@ -112,6 +128,8 @@ class RideService {
     _gpsSub = null;
     _timer?.cancel();
     _timer = null;
+    _matchTimer?.cancel();
+    _matchTimer = null;
     CrashDetector.stopMonitoring();
     BackgroundService.stopRideService();
     _reset();
@@ -163,9 +181,19 @@ class RideService {
       }
       lastPosition = pos;
 
+      // Update heading (NaN when stationary — keep last known)
+      if (!pos.heading.isNaN && pos.heading >= 0) bearing = pos.heading;
+
       final ll = LatLng(pos.latitude, pos.longitude);
       routePoints.add(ll);
       if (routePoints.length > 1000) routePoints.removeAt(0);
+
+      // Add raw point immediately to snapped list for instant visual response
+      // (will be corrected by the match timer)
+      snappedRoutePoints.add(ll);
+      if (snappedRoutePoints.length > 5000) snappedRoutePoints.removeAt(0);
+
+      _pendingRaw.add(ll);
 
       _notify();
     });
@@ -190,10 +218,60 @@ class RideService {
     totalSpeedSum = 0;
     speedReadings = 0;
     elapsedSeconds = 0;
+    bearing = 0;
     lastPosition = null;
     startTime = null;
     routePoints = [];
+    snappedRoutePoints = [];
+    _pendingRaw.clear();
+    _snapOverlap = [];
     _notify();
+  }
+
+  static void _startMatchTimer() {
+    _matchTimer?.cancel();
+    // Every 3 seconds, snap the accumulated raw GPS buffer to actual roads
+    _matchTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (!isRiding || _pendingRaw.isEmpty) return;
+
+      // Build the batch: overlap from last snap + new pending points
+      final batch = [..._snapOverlap, ..._pendingRaw];
+      if (batch.length < 2) return;
+
+      final committed = _pendingRaw.length;
+      _pendingRaw.clear(); // clear before async so new pts go to next batch
+
+      final snapped = await RouteService.matchGpsTrace(batch);
+      if (!isRiding) return;
+
+      // Skip the overlap portion — only keep the newly snapped segment
+      final newPoints = snapped.length > _snapOverlap.length
+          ? snapped.sublist(_snapOverlap.length)
+          : snapped;
+
+      // Replace the corresponding raw tail in snappedRoutePoints with snapped
+      if (snappedRoutePoints.length >= committed) {
+        snappedRoutePoints = [
+          ...snappedRoutePoints.sublist(
+              0, snappedRoutePoints.length - committed),
+          ...newPoints,
+        ];
+      } else {
+        snappedRoutePoints = newPoints;
+      }
+
+      // Keep last 3 snapped points as overlap for next batch
+      _snapOverlap = snappedRoutePoints.length >= 3
+          ? snappedRoutePoints.sublist(snappedRoutePoints.length - 3)
+          : List.from(snappedRoutePoints);
+
+      if (snappedRoutePoints.length > 5000) {
+        snappedRoutePoints =
+            snappedRoutePoints.sublist(snappedRoutePoints.length - 5000);
+      }
+
+      _notify();
+    });
   }
 
   static void _notify() {

@@ -286,4 +286,47 @@ class RouteService {
     await prefs.setString(
         _kSavedKey, json.encode(existing.map((r) => r.toJson()).toList()));
   }
+
+  // ── OSRM Map Matching (road snapping) ────────────────────────────────────
+
+  /// Snap a list of raw GPS points to actual roads using OSRM /match.
+  /// Returns snapped coordinates, or the original list on any error.
+  static Future<List<LatLng>> matchGpsTrace(List<LatLng> points) async {
+    if (points.length < 2) return points;
+
+    // Build coordinate string: lng,lat pairs separated by ;
+    final coords =
+        points.map((p) => '${p.longitude},${p.latitude}').join(';');
+    // 25 m snap radius per point — tight enough to follow roads
+    final radii = List.filled(points.length, '25').join(';');
+    final uri = Uri.parse(
+      'https://router.project-osrm.org/match/v1/driving/$coords'
+      '?overview=full&geometries=geojson&radiuses=$radii&gaps=ignore',
+    );
+
+    try {
+      final res = await http
+          .get(uri, headers: {'User-Agent': 'MotoPulse/1.2'})
+          .timeout(const Duration(seconds: 5));
+      if (res.statusCode != 200) return points;
+
+      final data = json.decode(res.body) as Map<String, dynamic>;
+      if (data['code'] != 'Ok') return points;
+
+      final matchings = data['matchings'] as List?;
+      if (matchings == null || matchings.isEmpty) return points;
+
+      final geometry =
+          matchings.first['geometry'] as Map<String, dynamic>;
+      final coordList = geometry['coordinates'] as List;
+      return coordList
+          .map((c) => LatLng(
+                (c[1] as num).toDouble(),
+                (c[0] as num).toDouble(),
+              ))
+          .toList();
+    } catch (_) {
+      return points; // fall back to raw GPS on error / timeout
+    }
+  }
 }
