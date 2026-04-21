@@ -4,7 +4,7 @@ A dark, full-featured riding companion app for motorcyclists. Built with Flutter
 
 ## Download
 
-**[MotoPulse-v1.2.0.apk](https://github.com/seeseal/motopulse/releases/download/v1.2.0/MotoPulse-v1.2.0.apk)** — sideload directly on any Android device (arm64).
+**[MotoPulse-v1.2.1.apk](https://github.com/seeseal/motopulse/releases/download/v1.2.1/MotoPulse-v1.2.1.apk)** — sideload directly on any Android device (arm64).
 
 ---
 
@@ -149,6 +149,13 @@ group_rides/
 ---
 
 ## Changelog
+
+### v1.2.1 — Ride Tracking Improvements
+- Traffic layer toggle on the ride map (tap the traffic icon to show/hide live traffic)
+- Moving marker changed to a bike icon; red pin stays at the ride's start point
+- GPS accuracy filter — noisy fixes (>20 m accuracy) discarded to prevent path hallucination
+- Background GPS fix — uses AndroidSettings with explicit interval; battery optimisation exemption requested automatically on ride start
+- Fixed `dart:ui` alias conflict from v1.2.0 cleanup
 
 ### v1.2.0 — Cleanup & Ride Awareness
 - Dashboard hero button now shows **ONGOING RIDE** (with live timer and distance) when a ride is active, instead of staying on "START RIDE"

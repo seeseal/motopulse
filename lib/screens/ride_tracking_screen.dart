@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
@@ -33,6 +33,40 @@ const String _kDarkMapStyle = '''[
 /// Convert latlong2.LatLng → gmaps.LatLng
 gmaps.LatLng _gl(LatLng p) => gmaps.LatLng(p.latitude, p.longitude);
 
+/// Render a Material icon into a [gmaps.BitmapDescriptor] at [sizePx].
+Future<gmaps.BitmapDescriptor> _iconToBitmap(
+    IconData icon, Color bg, double sizePx) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = ui.Canvas(recorder);
+  final r = sizePx / 2;
+
+  // Circle background
+  canvas.drawCircle(
+    ui.Offset(r, r),
+    r,
+    ui.Paint()..color = bg,
+  );
+
+  // Icon glyph
+  final tp = TextPainter(textDirection: TextDirection.ltr)
+    ..text = TextSpan(
+      text: String.fromCharCode(icon.codePoint),
+      style: TextStyle(
+        fontSize: sizePx * 0.55,
+        fontFamily: icon.fontFamily,
+        package: icon.fontPackage,
+        color: Colors.white,
+      ),
+    )
+    ..layout();
+  tp.paint(canvas, ui.Offset((sizePx - tp.width) / 2, (sizePx - tp.height) / 2));
+
+  final picture = recorder.endRecording();
+  final img = await picture.toImage(sizePx.toInt(), sizePx.toInt());
+  final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+  return gmaps.BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
+}
+
 class RideTrackingScreen extends StatefulWidget {
   const RideTrackingScreen({super.key});
 
@@ -46,6 +80,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   gmaps.GoogleMapController? _mapController;
   LatLng _currentLatLng = const LatLng(3.1390, 101.6869);
   bool _locationReady = false;
+  bool _trafficEnabled = false;
+  gmaps.BitmapDescriptor? _bikeMarker;
+  LatLng? _rideStartPos;
 
   // Profile-driven settings
   double _speedLimitKmh = 100.0;
@@ -79,6 +116,8 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         _fuelEfficiencyKmL = p.fuelEfficiencyKmL;
       });
     });
+    _iconToBitmap(Icons.two_wheeler_rounded, const Color(0xFFE8003D), 56)
+        .then((bmp) { if (mounted) setState(() => _bikeMarker = bmp); });
     _crashSub = CrashDetector.onCrashDetected.listen((_) {
       if (!mounted) return;
       Navigator.of(context).push(PageRouteBuilder(
@@ -157,10 +196,12 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       _showSnack('Please enable location services.');
       return;
     }
+    setState(() => _rideStartPos = _currentLatLng);
     RideService.startRide(initialPos: _locationReady ? _currentLatLng : null);
   }
 
   Future<void> _stopRide() async {
+    setState(() => _rideStartPos = null);
     final ride = await RideService.stopRide();
     if (!mounted) return;
     if (ride == null) {
@@ -281,14 +322,31 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
   Set<gmaps.Marker> _buildMarkers() {
     final result = <gmaps.Marker>{};
-    // My position
+
+    // Red start pin — shown at the ride's origin while riding
+    if (RideService.isRiding && _rideStartPos != null) {
+      result.add(gmaps.Marker(
+        markerId: const gmaps.MarkerId('start'),
+        position: _gl(_rideStartPos!),
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueRed),
+        anchor: const Offset(0.5, 1.0),
+        infoWindow: const gmaps.InfoWindow(title: 'Ride Start'),
+      ));
+    }
+
+    // Current position: bike icon when riding, red pin when idle
     result.add(gmaps.Marker(
       markerId: const gmaps.MarkerId('me'),
       position: _gl(_currentLatLng),
-      icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(gmaps.BitmapDescriptor.hueRed),
+      icon: RideService.isRiding && _bikeMarker != null
+          ? _bikeMarker!
+          : gmaps.BitmapDescriptor.defaultMarkerWithHue(
+              gmaps.BitmapDescriptor.hueRed),
       anchor: const Offset(0.5, 0.5),
-      flat: true,
+      flat: RideService.isRiding,
     ));
+
     // Waypoint markers
     if (RouteService.hasRoute) {
       final wpts = RouteService.activePlan!.waypoints;
@@ -297,7 +355,8 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         result.add(gmaps.Marker(
           markerId: gmaps.MarkerId('wp_$i'),
           position: _gl(wpts[i].position),
-          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(gmaps.BitmapDescriptor.hueAzure),
+          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+              gmaps.BitmapDescriptor.hueAzure),
           infoWindow: gmaps.InfoWindow(title: label, snippet: wpts[i].label),
           anchor: const Offset(0.5, 1.0),
         ));
@@ -332,6 +391,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                 ),
                 polylines: _buildPolylines(),
                 markers: _buildMarkers(),
+                trafficEnabled: _trafficEnabled,
                 myLocationButtonEnabled: false,
                 zoomControlsEnabled: false,
                 mapToolbarEnabled: false,
@@ -412,6 +472,32 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                 ),
               ),
 
+              // Traffic toggle button
+              Positioned(
+                right: 16, bottom: 64,
+                child: GestureDetector(
+                  onTap: () => setState(() => _trafficEnabled = !_trafficEnabled),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 40, height: 40,
+                    decoration: BoxDecoration(
+                      color: _trafficEnabled
+                          ? const Color(0xFFE8003D).withOpacity(0.9)
+                          : const Color(0xFF111111).withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _trafficEnabled
+                            ? const Color(0xFFE8003D).withOpacity(0.5)
+                            : Colors.white.withOpacity(0.08),
+                      ),
+                    ),
+                    child: Icon(Icons.traffic_rounded,
+                        color: _trafficEnabled ? Colors.white : Colors.white54,
+                        size: 18),
+                  ),
+                ),
+              ),
+
               // Re-center button
               Positioned(
                 right: 16, bottom: 16,
@@ -457,7 +543,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
           // ── Stats panel ───────────────────────────────────────────────────
           ClipRect(
             child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+              filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
               child: Container(
                 color: Colors.black.withOpacity(0.55),
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),

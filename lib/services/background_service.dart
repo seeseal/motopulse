@@ -33,6 +33,11 @@ class BackgroundService {
   /// Android from killing the GPS stream.
   static Future<void> startRideService() async {
     _ensureInit();
+    // Ask the system to ignore battery optimisation for this app so GPS
+    // keeps running when the screen is off.
+    if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+      await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+    }
     await FlutterForegroundTask.startService(
       serviceId: 101,
       notificationTitle: 'MotoPulse – Ride Active',

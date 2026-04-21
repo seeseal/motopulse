@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/ride_model.dart';
@@ -120,12 +121,27 @@ class RideService {
 
   static void _startGPS() {
     _gpsSub?.cancel();
-    _gpsSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
+
+    final LocationSettings settings;
+    if (Platform.isAndroid) {
+      settings = AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 2,
-      ),
-    ).listen((pos) {
+        forceLocationManager: false,
+        intervalDuration: const Duration(seconds: 1),
+      );
+    } else {
+      settings = const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 2,
+      );
+    }
+
+    _gpsSub = Geolocator.getPositionStream(locationSettings: settings)
+        .listen((pos) {
+      // Discard noisy / inaccurate fixes (main cause of path hallucination)
+      if (pos.accuracy > 20.0) return;
+
       final spd = (pos.speed * 3.6).clamp(0.0, 300.0);
       speedKmh = spd;
       if (spd > maxSpeedKmh) maxSpeedKmh = spd;
