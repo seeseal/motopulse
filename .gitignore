@@ -70,6 +70,20 @@ service_account_key.json
 .DS_Store
 **/.DS_Store
 
-# Temp files
+# Temp files & local build scripts
 commitmsg.txt
+commitmsg_*.txt
 upload_apk.ps1
+run_build.js
+build_v*.bat
+release_v*.ps1
+
+# Build & test logs
+build_log.txt
+build_v*_log.txt
+pub_get_log.txt
+pub_get_err.txt
+*test.txt
+*test2.txt
+envtest.txt
+wheretest.txt

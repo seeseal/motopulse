@@ -1,2 +1,0 @@
-FAIL:Command failed: C:\Windows\System32\WHERE.exe git
-INFO: Could not find files for the given pattern(s).
