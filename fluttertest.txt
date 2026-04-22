@@ -1,0 +1,4 @@
+starting...
+ERR:Command failed: C:\\flutter\\bin\\flutter.bat --version
+'WHERE' is not recognized as an internal or external command,
+operable program or batch file.

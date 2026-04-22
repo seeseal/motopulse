@@ -143,22 +143,22 @@ class RideService {
     final LocationSettings settings;
     if (Platform.isAndroid) {
       settings = AndroidSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 2,
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
         forceLocationManager: false,
-        intervalDuration: const Duration(seconds: 1),
+        intervalDuration: const Duration(seconds: 5),
       );
     } else {
       settings = const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 2,
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
       );
     }
 
     _gpsSub = Geolocator.getPositionStream(locationSettings: settings)
         .listen((pos) {
       // Discard noisy / inaccurate fixes (main cause of path hallucination)
-      if (pos.accuracy > 20.0) return;
+      if (pos.accuracy > 25.0) return;
 
       final spd = (pos.speed * 3.6).clamp(0.0, 300.0);
       speedKmh = spd;
@@ -283,9 +283,6 @@ class RideService {
     final h = elapsedSeconds ~/ 3600;
     final m = (elapsedSeconds % 3600) ~/ 60;
     final s = elapsedSeconds % 60;
-    if (h > 0) {
-      return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-    }
-    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 }

@@ -97,33 +97,32 @@ class RouteService {
   static bool get hasRoute => _activePlan != null;
   static void clearRoute() => _activePlan = null;
 
-  // ── Geocoding (Nominatim — free, no key) ─────────────────────────────────
+  // ── Geocoding (Google Geocoding API) ─────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> searchPlace(String query) async {
     if (query.trim().length < 3) return [];
-    final url = Uri.parse(
-      'https://nominatim.openstreetmap.org/search'
-      '?q=${Uri.encodeComponent(query)}'
-      '&format=json&limit=6&addressdetails=1',
+    final url = Uri.https(
+      'maps.googleapis.com',
+      '/maps/api/geocode/json',
+      {'address': query, 'key': _kMapsKey},
     );
     try {
-      final res = await http.get(url, headers: {
-        'User-Agent': 'MotoPulse/1.1 (riding companion app)',
-      }).timeout(const Duration(seconds: 8));
+      final res = await http.get(url).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
-        final data = json.decode(res.body) as List;
-        return data.map((e) {
-          final addr = e['address'] as Map<String, dynamic>? ?? {};
-          final short = [
-            addr['road'] ?? addr['pedestrian'] ?? '',
-            addr['city'] ?? addr['town'] ?? addr['village'] ?? addr['county'] ?? '',
-            addr['country'] ?? '',
-          ].where((s) => s.isNotEmpty).take(2).join(', ');
+        final data = json.decode(res.body) as Map<String, dynamic>;
+        if (data['status'] != 'OK') return [];
+        final results = (data['results'] as List).cast<Map<String, dynamic>>();
+        return results.take(6).map((r) {
+          final loc = r['geometry']['location'] as Map<String, dynamic>;
+          final full = r['formatted_address'] as String;
+          // Build a short label from the first two comma-separated components
+          final parts = full.split(',');
+          final name = parts.take(2).join(',').trim();
           return {
-            'name': short.isNotEmpty ? short : (e['display_name'] as String),
-            'full': e['display_name'] as String,
-            'lat': double.parse(e['lat'] as String),
-            'lng': double.parse(e['lon'] as String),
+            'name': name.isNotEmpty ? name : full,
+            'full': full,
+            'lat': (loc['lat'] as num).toDouble(),
+            'lng': (loc['lng'] as num).toDouble(),
           };
         }).toList();
       }

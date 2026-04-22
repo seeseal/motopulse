@@ -1,0 +1,10 @@
+feat: v1.4.0 - crash detection state machine, background GPS, Google Geocoding
+
+- Replace flutter_foreground_task with flutter_background_service for
+  more reliable Android background GPS keepalive
+- Tune GPS: LocationAccuracy.high, 5s interval, 10m distance filter
+- Rewrite crash detection as multi-signal state machine:
+  impact >3.5g + pre-event speed >25 km/h + 15s post-impact immobility
+- Reduce emergency countdown from 30s to 15s
+- Replace Nominatim with Google Geocoding API in route planner
+- Bump version to 1.4.0+6

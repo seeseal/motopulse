@@ -17,7 +17,7 @@ class CrashAlertOverlay extends StatefulWidget {
 
 class _CrashAlertOverlayState extends State<CrashAlertOverlay>
     with SingleTickerProviderStateMixin {
-  static const int _countdownStart = 30;
+  static const int _countdownStart = 15;
   int _remaining = _countdownStart;
   Timer? _ticker;
   late AnimationController _pulse;
