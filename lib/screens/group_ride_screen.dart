@@ -6,8 +6,10 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../services/battery_guard.dart';
 import '../services/group_ride_service.dart';
 import '../services/route_service.dart';
+import 'battery_gate_screen.dart';
 
 // ── Dark map style ────────────────────────────────────────────────────────────
 
@@ -59,6 +61,7 @@ class _GroupRideScreenState extends State<GroupRideScreen>
   bool _isConnected = false;
   bool _isLoading = false;
   bool _mapReady = false;
+  bool _batteryExempted = true; // assume OK until checked
   final TextEditingController _codeController = TextEditingController();
 
   // SOS alerts
@@ -72,6 +75,7 @@ class _GroupRideScreenState extends State<GroupRideScreen>
   @override
   void initState() {
     super.initState();
+    _checkBattery();
     _startGPS();
     if (GroupRideService.isActive) {
       _connectToRoom(GroupRideService.activeCode!);
@@ -89,6 +93,24 @@ class _GroupRideScreenState extends State<GroupRideScreen>
     _mapController?.dispose();
     _codeController.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkBattery() async {
+    final exempted = await BatteryGuard.isExempted();
+    if (mounted) setState(() => _batteryExempted = exempted);
+  }
+
+  // Gate helper — shows the blocking screen and returns true only when granted.
+  Future<bool> _ensureBatteryExempted() async {
+    if (_batteryExempted) return true;
+    if (!mounted) return false;
+    final granted = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const BatteryGateScreen()),
+    );
+    final nowExempted = granted == true;
+    if (mounted) setState(() => _batteryExempted = nowExempted);
+    return nowExempted;
   }
 
   Future<void> _startGPS() async {
@@ -122,6 +144,7 @@ class _GroupRideScreenState extends State<GroupRideScreen>
   }
 
   Future<void> _createRide() async {
+    if (!await _ensureBatteryExempted()) return; // gate
     setState(() => _isLoading = true);
     try {
       final code = await GroupRideService.createGroupRide();
@@ -133,6 +156,7 @@ class _GroupRideScreenState extends State<GroupRideScreen>
   }
 
   Future<void> _joinRide(String code) async {
+    if (!await _ensureBatteryExempted()) return; // gate
     setState(() => _isLoading = true);
     try {
       final success = await GroupRideService.joinGroupRide(code.toUpperCase());
@@ -302,6 +326,36 @@ class _GroupRideScreenState extends State<GroupRideScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF080808),
+      // Persistent banner when battery optimisation is still active
+      bottomNavigationBar: !_batteryExempted
+          ? SafeArea(
+              top: false,
+              child: GestureDetector(
+                onTap: _ensureBatteryExempted,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  color: Colors.orange.withOpacity(0.15),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.battery_alert_rounded,
+                          color: Colors.orange, size: 16),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Tracking disabled — battery optimisation is ON. Tap to fix.',
+                          style: TextStyle(
+                              color: Colors.orange,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          : null,
       body: Stack(
         children: [
           _buildMap(),

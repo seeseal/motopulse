@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -58,6 +60,19 @@ class GroupRideService {
 
   static String? get activeCode => _activeCode;
   static bool get isActive => _activeCode != null;
+
+  // ── Firebase write throttle ───────────────────────────────────────────────
+  static const double _minPushDistanceMetres = 12.0;
+  static const int _maxSilenceSeconds = 3;
+  static double? _lastPushedLat;
+  static double? _lastPushedLng;
+  static DateTime? _lastPushTime;
+
+  // ── Pending SOS retry ────────────────────────────────────────────────────
+  static const int _maxSOSRetries = 3;
+  static const String _pendingSOSKey = 'pending_sos';
+  static const String _syncedSOSTsKey = 'synced_sos_ts';
+  static StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
   static final List<Map<String, dynamic>> _avatarEmojis = [
     {'emoji': '🏍️'},
@@ -130,9 +145,39 @@ class GroupRideService {
     }
   }
 
-  /// Update this rider's position in the group
+  /// Update this rider's position in the group.
+  ///
+  /// Writes are suppressed when the rider has not moved more than
+  /// [_minPushDistanceMetres] AND less than [_maxSilenceSeconds] have elapsed
+  /// since the last push. GPS continues running at full rate locally; only the
+  /// Firebase write is throttled.
   static Future<void> updatePosition(
       String code, double lat, double lng, double speedKmh) async {
+    // ── Throttle gate ─────────────────────────────────────────────────────
+    final now = DateTime.now();
+    if (_lastPushedLat != null && _lastPushTime != null) {
+      final distanceMoved = Geolocator.distanceBetween(
+          _lastPushedLat!, _lastPushedLng!, lat, lng);
+      final elapsedSecs = now.difference(_lastPushTime!).inSeconds;
+
+      // Stationary jitter guard: GPS can drift 12 m+ over time even when
+      // the phone is sitting still. Hard-suppress writes when speed is very
+      // low regardless of the distance reading.
+      if (speedKmh < 3.0 && distanceMoved < 5.0) {
+        return; // definitely stationary — GPS noise, skip write
+      }
+
+      if (distanceMoved < _minPushDistanceMetres &&
+          elapsedSecs < _maxSilenceSeconds) {
+        return; // nothing meaningful changed — skip this write
+      }
+    }
+
+    _lastPushedLat = lat;
+    _lastPushedLng = lng;
+    _lastPushTime = now;
+
+    // ── Firebase write ────────────────────────────────────────────────────
     try {
       final prefs = await SharedPreferences.getInstance();
       final riderId = prefs.getString('rider_id') ?? '';
@@ -276,6 +321,11 @@ class GroupRideService {
     _gpsSubscription?.cancel();
     _gpsSubscription = null;
 
+    // Reset throttle so the first push on next session goes through immediately
+    _lastPushedLat = null;
+    _lastPushedLng = null;
+    _lastPushTime = null;
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final riderId = prefs.getString('rider_id') ?? '';
@@ -308,6 +358,94 @@ class GroupRideService {
         );
       }
     });
+  }
+
+  /// Call once at app startup (e.g. in main.dart after Firebase.initializeApp).
+  /// Starts a connectivity listener that flushes queued offline SOS alerts
+  /// whenever the device regains internet access.
+  static void init() {
+    _connectivitySub?.cancel();
+    _connectivitySub = Connectivity()
+        .onConnectivityChanged
+        .listen((results) {
+      final hasNetwork = results.any((r) => r != ConnectivityResult.none);
+      if (hasNetwork) flushPendingSOSAlerts();
+    });
+  }
+
+  /// Checks whether a group ride session exists in Firestore.
+  static Future<bool> sessionExists(String code) async {
+    try {
+      final doc = await _db.collection(_collection).doc(code).get()
+          .timeout(const Duration(seconds: 5));
+      return doc.exists && (doc.data()?['active'] == true);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Retries pending offline SOS alerts that were queued when there was no
+  /// network. Deduplicates by timestamp, caps retries at [_maxSOSRetries].
+  static Future<void> flushPendingSOSAlerts() async {
+    if (_activeCode == null) return; // can only post if we're in a session
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final riderId = prefs.getString('rider_id') ?? '';
+      if (riderId.isEmpty) return;
+
+      final pending = List<String>.from(prefs.getStringList(_pendingSOSKey) ?? []);
+      if (pending.isEmpty) return;
+
+      final synced = List<String>.from(prefs.getStringList(_syncedSOSTsKey) ?? []);
+      final remaining = <String>[];
+
+      for (final raw in pending) {
+        Map<String, dynamic> event;
+        try {
+          event = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+        } catch (_) {
+          continue; // corrupt entry — discard
+        }
+
+        final ts = event['ts'] as String? ?? '';
+        final attempts = (event['attempts'] as num?)?.toInt() ?? 0;
+
+        // Skip already-synced (dedup by timestamp)
+        if (synced.contains(ts)) continue;
+        // Drop events that have hit the retry ceiling
+        if (attempts >= _maxSOSRetries) continue;
+
+        try {
+          await _db
+              .collection(_collection)
+              .doc(_activeCode)
+              .collection('sos')
+              .doc(riderId)
+              .set({
+            'name': event['riderName'] ?? 'Rider',
+            'lat': event['lat'],
+            'lng': event['lng'],
+            'active': true,
+            'triggeredAt': FieldValue.serverTimestamp(),
+            'offlineCached': true,
+          }).timeout(const Duration(seconds: 5));
+
+          synced.add(ts);
+        } catch (_) {
+          // Still failing — increment attempt counter and keep in queue
+          event['attempts'] = attempts + 1;
+          remaining.add(jsonEncode(event));
+        }
+      }
+
+      await prefs.setStringList(_pendingSOSKey, remaining);
+
+      // Keep synced list bounded (last 20 timestamps)
+      final trimmed = synced.length > 20
+          ? synced.sublist(synced.length - 20)
+          : synced;
+      await prefs.setStringList(_syncedSOSTsKey, trimmed);
+    } catch (_) {}
   }
 
   static String _generateRiderId(SharedPreferences prefs) {

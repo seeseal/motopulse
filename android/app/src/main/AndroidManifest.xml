@@ -12,6 +12,8 @@
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <!-- READ/WRITE_EXTERNAL_STORAGE removed: replaced by READ_MEDIA_IMAGES for Android 13+ -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Required for permission_handler to open the battery optimisation exemption dialog -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <application
         android:label="MotoPulse"
         android:name="${applicationName}"

@@ -1,8 +1,12 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../services/crash_detector.dart';
 import '../services/group_ride_service.dart';
 import '../services/profile_service.dart';
 
@@ -44,7 +48,9 @@ class _SOSScreenState extends State<SOSScreen>
 
   Future<void> _activateSOS() async {
     if (_sosActivated) {
-      // Cancel SOS
+      // User cancelled — they are conscious and safe.
+      // Reset crash detector cooldown so a new real incident can be detected.
+      CrashDetector.resetCooldown();
       await GroupRideService.cancelSOS();
       setState(() {
         _sosActivated = false;
@@ -55,7 +61,7 @@ class _SOSScreenState extends State<SOSScreen>
 
     setState(() => _sosActivated = true);
 
-    // Get current GPS location
+    // ── 1. Get current GPS position ──────────────────────────────────────────
     Position? position;
     try {
       final perm = await Geolocator.checkPermission();
@@ -67,32 +73,107 @@ class _SOSScreenState extends State<SOSScreen>
       }
     } catch (_) {}
 
-    // Send SMS to emergency contact
-    if (_profile != null && _profile!.emergencyPhone.isNotEmpty) {
-      final phone = _profile!.emergencyPhone.replaceAll(RegExp(r'[^\d+]'), '');
-      final lat = position?.latitude.toStringAsFixed(5) ?? 'unknown';
-      final lng = position?.longitude.toStringAsFixed(5) ?? 'unknown';
-      final msg = Uri.encodeComponent(
-        'EMERGENCY: ${_profile!.name} needs help! '
-        'Location: https://maps.google.com/?q=$lat,$lng '
-        '- Sent via MotoPulse',
-      );
-      final smsUri = Uri.parse('sms:$phone?body=$msg');
+    // ── 2. Check network before deciding dispatch path ───────────────────────
+    // Note: connectivity_plus reports network TYPE (wifi/mobile), not whether
+    // the internet is actually reachable. We treat it as "maybe online" and
+    // use a timeout on the Firebase write to detect true unreachability.
+    final connectivity = await Connectivity().checkConnectivity();
+    final likelyOnline = connectivity != ConnectivityResult.none;
+
+    bool groupAlerted = false;
+    bool smsSent = false;
+    bool callAttempted = false;
+    bool firebaseSucceeded = false;
+
+    if (likelyOnline && GroupRideService.isActive && position != null) {
+      // ── Attempt Firebase group alert (5 s timeout) ───────────────────────
       try {
-        await launchUrl(smsUri);
-      } catch (_) {}
+        await GroupRideService.triggerSOS(position.latitude, position.longitude)
+            .timeout(const Duration(seconds: 5));
+        groupAlerted = true;
+        firebaseSucceeded = true;
+      } catch (_) {
+        // Firebase timed out or threw — fall through to direct contacts below
+        firebaseSucceeded = false;
+      }
     }
 
-    // Alert group ride if active
-    bool groupAlerted = false;
-    if (GroupRideService.isActive && position != null) {
-      await GroupRideService.triggerSOS(position.latitude, position.longitude);
-      groupAlerted = true;
+    // ── SMS — always send, regardless of Firebase outcome ───────────────────
+    // (url_launcher intent is network-independent)
+    await _sendSMSToContact(position);
+    smsSent = true;
+
+    // ── Call — send when offline OR Firebase failed OR no group active ───────
+    // In the online+group path the group alert is the primary escalation;
+    // the call is the fallback when that path fails.
+    if (!firebaseSucceeded || !likelyOnline) {
+      await _attemptEmergencyCall();
+      callAttempted = true;
+    }
+
+    // ── Queue locally if Firebase was unavailable ────────────────────────────
+    if (!firebaseSucceeded && GroupRideService.isActive) {
+      await _saveSOSLocally(position);
     }
 
     if (!mounted) return;
     setState(() => _alertingSent = groupAlerted);
 
+    _showSOSConfirmDialog(
+      position: position,
+      groupAlerted: groupAlerted,
+      wasOffline: !likelyOnline || !firebaseSucceeded,
+      callAttempted: callAttempted,
+    );
+  }
+
+  // ── SOS helpers ─────────────────────────────────────────────────────────────
+
+  Future<void> _sendSMSToContact(Position? position) async {
+    if (_profile == null || _profile!.emergencyPhone.isEmpty) return;
+    final phone = _profile!.emergencyPhone.replaceAll(RegExp(r'[^\d+]'), '');
+    final lat = position?.latitude.toStringAsFixed(5) ?? 'unknown';
+    final lng = position?.longitude.toStringAsFixed(5) ?? 'unknown';
+    final msg = Uri.encodeComponent(
+      'EMERGENCY: ${_profile!.name} needs help! '
+      'Location: https://maps.google.com/?q=$lat,$lng '
+      '— Sent via MotoPulse',
+    );
+    try {
+      await launchUrl(Uri.parse('sms:$phone?body=$msg'));
+    } catch (_) {}
+  }
+
+  Future<void> _attemptEmergencyCall() async {
+    if (_profile == null || _profile!.emergencyPhone.isEmpty) return;
+    final phone = _profile!.emergencyPhone.replaceAll(RegExp(r'[^\d+]'), '');
+    try {
+      await launchUrl(Uri.parse('tel:$phone'));
+    } catch (_) {}
+  }
+
+  /// Persists an offline SOS event to SharedPreferences so GroupRideService
+  /// can flush it to Firebase when connectivity is restored.
+  Future<void> _saveSOSLocally(Position? position) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final pending = prefs.getStringList('pending_sos') ?? [];
+      pending.add(jsonEncode({
+        'lat': position?.latitude,
+        'lng': position?.longitude,
+        'ts': DateTime.now().toIso8601String(),
+        'riderName': _profile?.name ?? 'Rider',
+      }));
+      await prefs.setStringList('pending_sos', pending);
+    } catch (_) {}
+  }
+
+  void _showSOSConfirmDialog({
+    required Position? position,
+    required bool groupAlerted,
+    required bool wasOffline,
+    required bool callAttempted,
+  }) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -113,36 +194,19 @@ class _SOSScreenState extends State<SOSScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (groupAlerted) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE8003D).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                      color: const Color(0xFFE8003D).withOpacity(0.3)),
-                ),
-                child: Row(
-                  children: const [
-                    Icon(Icons.group_rounded,
-                        color: Color(0xFFE8003D), size: 16),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Group ride alerted with your live location',
-                        style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
+            // Network / dispatch status banner
+            _sosStatusBanner(
+              groupAlerted: groupAlerted,
+              wasOffline: wasOffline,
+              callAttempted: callAttempted,
+            ),
+            const SizedBox(height: 12),
+
+            // Location
             if (position != null)
               Text(
-                'Location: ${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}',
+                'Location: ${position.latitude.toStringAsFixed(5)}, '
+                '${position.longitude.toStringAsFixed(5)}',
                 style: const TextStyle(color: Colors.white38, fontSize: 12),
               )
             else
@@ -150,17 +214,27 @@ class _SOSScreenState extends State<SOSScreen>
                 'Could not get exact location.',
                 style: TextStyle(color: Colors.white38, fontSize: 12),
               ),
+
             const SizedBox(height: 8),
-            const Text(
-              'Your emergency contacts have been notified.',
-              style: TextStyle(color: Colors.white38, fontSize: 13),
-            ),
+
+            // Offline queued note
+            if (wasOffline)
+              const Text(
+                'No signal — SOS saved and will sync when you reconnect.',
+                style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
+              )
+            else
+              const Text(
+                'Your emergency contacts have been notified.',
+                style: TextStyle(color: Colors.white38, fontSize: 13),
+              ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
+              CrashDetector.resetCooldown(); // user is safe — allow fresh detection
               await GroupRideService.cancelSOS();
               setState(() {
                 _sosActivated = false;
@@ -170,6 +244,55 @@ class _SOSScreenState extends State<SOSScreen>
             child: const Text(
               'Cancel SOS',
               style: TextStyle(color: Color(0xFFE8003D)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sosStatusBanner({
+    required bool groupAlerted,
+    required bool wasOffline,
+    required bool callAttempted,
+  }) {
+    final IconData icon;
+    final String label;
+    final Color color;
+
+    if (wasOffline && callAttempted) {
+      icon = Icons.signal_wifi_off_rounded;
+      label = 'Offline — SMS + call sent directly to contacts';
+      color = Colors.orange;
+    } else if (wasOffline) {
+      icon = Icons.signal_wifi_off_rounded;
+      label = 'Offline — SMS sent directly to contacts';
+      color = Colors.orange;
+    } else if (groupAlerted) {
+      icon = Icons.group_rounded;
+      label = 'Group ride alerted with your live location';
+      color = const Color(0xFFE8003D);
+    } else {
+      icon = Icons.message_rounded;
+      label = 'SMS sent to emergency contact';
+      color = const Color(0xFFE8003D);
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(color: color.withOpacity(0.9), fontSize: 12),
             ),
           ),
         ],
@@ -443,17 +566,15 @@ class _SOSScreenState extends State<SOSScreen>
 
   Future<void> _callContact(String phone) async {
     final clean = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    final uri = Uri.parse('tel:$clean');
     try {
-      await launchUrl(uri);
+      await launchUrl(Uri.parse('tel:$clean'));
     } catch (_) {}
   }
 
   Future<void> _smsContact(String phone) async {
     final clean = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    final uri = Uri.parse('sms:$clean');
     try {
-      await launchUrl(uri);
+      await launchUrl(Uri.parse('sms:$clean'));
     } catch (_) {}
   }
 

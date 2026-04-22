@@ -13,6 +13,8 @@ import '../services/ride_service.dart';
 import '../services/crash_detector.dart';
 import '../widgets/crash_alert_overlay.dart';
 import '../widgets/glass_card.dart';
+import '../services/battery_guard.dart';
+import 'battery_gate_screen.dart';
 import 'group_ride_screen.dart';
 
 const String _kDarkMapStyle = '''[
@@ -237,6 +239,18 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   // ──────────────────────────────────────────────────────────────────────────
 
   void _startRide() async {
+    // Battery gate — must be exempted from Android battery optimisation or
+    // the foreground GPS service will be killed mid-ride on most OEM ROMs.
+    final exempted = await BatteryGuard.isExempted();
+    if (!exempted) {
+      if (!mounted) return;
+      final granted = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(builder: (_) => const BatteryGateScreen()),
+      );
+      if (granted != true) return; // user did not grant — abort
+    }
+
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       _showSnack('Please enable location services.');

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/ride_model.dart';
+import 'ride_detail_screen.dart';
 
 class StatsScreen extends StatefulWidget {
   const StatsScreen({super.key});
@@ -16,6 +17,7 @@ class _StatsScreenState extends State<StatsScreen> {
   double _topSpeedKmh = 0;
   double _thisWeekKm = 0;
   List<double> _weeklyData = List.filled(7, 0.0);
+  List<RideModel> _rides = [];
 
   @override
   void initState() {
@@ -24,8 +26,13 @@ class _StatsScreenState extends State<StatsScreen> {
   }
 
   Future<void> _loadStats() async {
-    final stats = await RideStorage.getStats();
+    final results = await Future.wait([
+      RideStorage.getStats(),
+      RideStorage.loadRides(),
+    ]);
     if (mounted) {
+      final stats = results[0] as Map<String, dynamic>;
+      final rides = results[1] as List<RideModel>;
       setState(() {
         _totalKm = stats['totalKm'];
         _totalRides = stats['totalRides'];
@@ -33,6 +40,7 @@ class _StatsScreenState extends State<StatsScreen> {
         _topSpeedKmh = stats['topSpeedKmh'];
         _thisWeekKm = stats['thisWeekKm'];
         _weeklyData = List<double>.from(stats['weeklyData']);
+        _rides = rides; // newest first (RideStorage sorts descending)
         _isLoading = false;
       });
     }
@@ -201,6 +209,20 @@ class _StatsScreenState extends State<StatsScreen> {
 
                       const SizedBox(height: 24),
 
+                      // ── Past rides list ──────────────────────────────────
+                      if (_rides.isNotEmpty) ...[
+                        const Text(
+                          'PAST RIDES',
+                          style: TextStyle(
+                              color: Colors.white24,
+                              fontSize: 10,
+                              letterSpacing: 3),
+                        ),
+                        const SizedBox(height: 12),
+                        ..._rides.map(_buildRideCard),
+                        const SizedBox(height: 24),
+                      ],
+
                       const Text('ACHIEVEMENTS',
                           style: TextStyle(
                               color: Colors.white24,
@@ -286,6 +308,107 @@ class _StatsScreenState extends State<StatsScreen> {
                 color: isToday ? Colors.white54 : Colors.white24,
                 fontSize: 11)),
       ],
+    );
+  }
+
+  Widget _buildRideCard(RideModel ride) {
+    final hasRoute = ride.routePoints.isNotEmpty;
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => RideDetailScreen(ride: ride)),
+      ),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF111111),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withOpacity(0.05)),
+        ),
+        child: Row(
+          children: [
+            // Map preview icon / indicator
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: hasRoute
+                    ? const Color(0xFFE8003D).withOpacity(0.1)
+                    : Colors.white.withOpacity(0.04),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: hasRoute
+                      ? const Color(0xFFE8003D).withOpacity(0.25)
+                      : Colors.white.withOpacity(0.04),
+                ),
+              ),
+              child: Icon(
+                hasRoute ? Icons.map_rounded : Icons.route_rounded,
+                color: hasRoute
+                    ? const Color(0xFFE8003D)
+                    : Colors.white24,
+                size: 20,
+              ),
+            ),
+
+            const SizedBox(width: 14),
+
+            // Title + date
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    ride.title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    ride.relativeDate,
+                    style: const TextStyle(
+                        color: Colors.white30, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+
+            // Stats: distance + duration
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '${ride.distanceKm.toStringAsFixed(1)} km',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w300),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  ride.formattedDuration,
+                  style: const TextStyle(
+                      color: Colors.white30, fontSize: 12),
+                ),
+              ],
+            ),
+
+            const SizedBox(width: 10),
+
+            // Chevron hint
+            Icon(
+              Icons.chevron_right_rounded,
+              color: hasRoute
+                  ? Colors.white24
+                  : Colors.white.withOpacity(0.08),
+              size: 18,
+            ),
+          ],
+        ),
+      ),
     );
   }
 

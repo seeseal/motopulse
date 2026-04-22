@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'screens/splash_screen.dart';
 import 'services/background_service.dart';
+import 'services/group_ride_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,6 +17,8 @@ void main() async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+    // Start connectivity listener for pending SOS flush (must be after Firebase init)
+    GroupRideService.init();
   } catch (_) {
     // Firebase not configured yet — app still works, group rides disabled
   }

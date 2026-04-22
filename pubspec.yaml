@@ -3,7 +3,7 @@ description: MotoPulse - Advanced Rider Safety & Tracking App
 
 publish_to: 'none'
 
-version: 1.4.1+7
+version: 1.4.2+8
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -47,6 +47,13 @@ dependencies:
 
   # Crash detection (accelerometer / gyroscope)
   sensors_plus: ^4.0.2
+
+  # Battery optimisation gate + OEM detection
+  permission_handler: ^11.0.0
+  device_info_plus: ^9.0.0
+
+  # Offline SOS failover
+  connectivity_plus: ^5.0.0
 
 dev_dependencies:
   flutter_test:
