@@ -927,6 +927,12 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
   List<SavedRoute> _savedRoutes = [];
   bool _showSaved = false;
 
+  // Live autocomplete state
+  int? _activeFieldIdx;
+  List<Map<String, dynamic>> _suggestions = [];
+  bool _isSearching = false;
+  Timer? _debounce;
+
   @override
   void initState() {
     super.initState();
@@ -940,6 +946,7 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     for (final c in _controllers) c.dispose();
     super.dispose();
   }
@@ -961,55 +968,92 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
     });
   }
 
+  // Called on every keystroke — debounced 400 ms
+  void _onFieldChanged(int index, String value) {
+    // Clear the confirmed waypoint when the user edits the field
+    if (_waypoints[index] != null) {
+      setState(() => _waypoints[index] = null);
+    }
+    _debounce?.cancel();
+    final q = value.trim();
+    if (q.length < 2) {
+      setState(() {
+        _suggestions = [];
+        _activeFieldIdx = null;
+        _isSearching = false;
+      });
+      return;
+    }
+    setState(() {
+      _activeFieldIdx = index;
+      _isSearching = true;
+      _suggestions = [];
+      _error = null;
+    });
+    _debounce = Timer(const Duration(milliseconds: 400), () async {
+      final results = await RouteService.searchPlace(q);
+      if (mounted && _activeFieldIdx == index) {
+        setState(() {
+          _suggestions = results;
+          _isSearching = false;
+        });
+      }
+    });
+  }
+
+  // Tap on an autocomplete suggestion → fetch Place Details → set waypoint
+  Future<void> _selectSuggestion(Map<String, dynamic> suggestion) async {
+    final idx = _activeFieldIdx;
+    if (idx == null) return;
+    // Show the chosen name immediately
+    _controllers[idx].text = suggestion['name'] as String;
+    setState(() {
+      _suggestions = [];
+      _isSearching = false;
+      _activeFieldIdx = null;
+      _error = null;
+    });
+    final details =
+        await RouteService.getPlaceDetails(suggestion['place_id'] as String);
+    if (!mounted) return;
+    if (details == null) {
+      setState(() => _error = 'Could not get location details. Try again.');
+      return;
+    }
+    _setWaypoint(idx, details);
+  }
+
+  // Manual search trigger (search icon tap) — fetches suggestions immediately
   Future<void> _searchAndSet(int index) async {
     final query = _controllers[index].text.trim();
     if (query.isEmpty) return;
-    setState(() => _error = null);
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _error = null;
+      _activeFieldIdx = index;
+      _isSearching = true;
+      _suggestions = [];
+    });
     final results = await RouteService.searchPlace(query);
     if (!mounted) return;
+    setState(() {
+      _isSearching = false;
+      _suggestions = results;
+    });
     if (results.isEmpty) {
       setState(() => _error = 'No results for "$query"');
-      return;
     }
-    if (results.length == 1) {
-      _setWaypoint(index, results.first);
-      return;
-    }
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF111111),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => ListView.separated(
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(0, 12, 0, 24),
-        itemCount: results.length,
-        separatorBuilder: (_, __) =>
-            Divider(color: Colors.white.withOpacity(0.05), height: 1),
-        itemBuilder: (ctx, i) => ListTile(
-          leading: const Icon(Icons.location_on_rounded, color: Color(0xFF2979FF)),
-          title: Text(results[i]['name'],
-              style: const TextStyle(color: Colors.white, fontSize: 13)),
-          subtitle: Text(
-            results[i]['full'].toString().split(',').take(2).join(','),
-            style: const TextStyle(color: Colors.white38, fontSize: 11),
-            maxLines: 1, overflow: TextOverflow.ellipsis,
-          ),
-          onTap: () {
-            Navigator.pop(ctx);
-            _setWaypoint(index, results[i]);
-          },
-        ),
-      ),
-    );
   }
 
   void _setWaypoint(int index, Map<String, dynamic> result) {
     setState(() {
-      _controllers[index].text = result['name'];
+      _controllers[index].text = result['name'] as String;
       _waypoints[index] = Waypoint(
-        label: result['name'],
-        position: LatLng(result['lat'], result['lng']),
+        label: result['name'] as String,
+        position: LatLng(
+          (result['lat'] as num).toDouble(),
+          (result['lng'] as num).toDouble(),
+        ),
       );
     });
   }
@@ -1227,7 +1271,7 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
             ],
 
             const SizedBox(height: 4),
-            const Text('Enter addresses and tap the arrow to search',
+            const Text('Type a place name — suggestions appear instantly',
                 style: TextStyle(color: Colors.white30, fontSize: 12)),
             const SizedBox(height: 16),
 
@@ -1280,19 +1324,45 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
                           hintText: labels[i],
                           hintStyle: const TextStyle(color: Colors.white24, fontSize: 13),
                           filled: true,
-                          fillColor: const Color(0xFF1A1A1A),
+                          fillColor: _activeFieldIdx == i
+                              ? const Color(0xFF222222)
+                              : const Color(0xFF1A1A1A),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                             borderSide: BorderSide.none,
                           ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                                color: const Color(0xFF2979FF).withOpacity(0.4)),
+                          ),
                           contentPadding: const EdgeInsets.symmetric(
                               horizontal: 14, vertical: 12),
-                          suffixIcon: GestureDetector(
-                            onTap: () => _searchAndSet(i),
-                            child: const Icon(Icons.search_rounded,
-                                color: Color(0xFF2979FF), size: 18),
-                          ),
+                          suffixIcon: _isSearching && _activeFieldIdx == i
+                              ? const Padding(
+                                  padding: EdgeInsets.all(13),
+                                  child: SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 1.5,
+                                        color: Color(0xFF2979FF)),
+                                  ),
+                                )
+                              : GestureDetector(
+                                  onTap: () => _searchAndSet(i),
+                                  child: Icon(
+                                    _waypoints[i] != null
+                                        ? Icons.check_circle_rounded
+                                        : Icons.search_rounded,
+                                    color: _waypoints[i] != null
+                                        ? const Color(0xFF00C853)
+                                        : const Color(0xFF2979FF),
+                                    size: 18,
+                                  ),
+                                ),
                         ),
+                        onChanged: (v) => _onFieldChanged(i, v),
                         onSubmitted: (_) => _searchAndSet(i),
                       ),
                     ),
@@ -1312,6 +1382,95 @@ class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
                 );
               },
             ),
+
+            // ── Autocomplete suggestions panel ──────────────────────────────
+            if (_isSearching && _suggestions.isEmpty)
+              Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A1A),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withOpacity(0.07)),
+                ),
+                child: const Center(
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.5, color: Color(0xFF2979FF)),
+                  ),
+                ),
+              )
+            else if (_suggestions.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A1A),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF2979FF).withOpacity(0.25)),
+                ),
+                clipBehavior: Clip.hardEdge,
+                child: Column(
+                  children: _suggestions.asMap().entries.map((entry) {
+                    final idx = entry.key;
+                    final s = entry.value;
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (idx > 0)
+                          Divider(
+                              color: Colors.white.withOpacity(0.05), height: 1),
+                        InkWell(
+                          onTap: () => _selectSuggestion(s),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 11),
+                            child: Row(children: [
+                              Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color:
+                                      const Color(0xFF2979FF).withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(Icons.location_on_rounded,
+                                    color: Color(0xFF2979FF), size: 16),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      s['name'] as String,
+                                      style: const TextStyle(
+                                          color: Colors.white, fontSize: 13),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      s['full'] as String,
+                                      style: const TextStyle(
+                                          color: Colors.white38, fontSize: 11),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(Icons.north_west_rounded,
+                                  color: Colors.white24, size: 14),
+                            ]),
+                          ),
+                        ),
+                      ],
+                    );
+                  }).toList(),
+                ),
+              ),
 
             // Add stop
             if (_controllers.length < 6)

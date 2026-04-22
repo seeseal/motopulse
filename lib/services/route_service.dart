@@ -97,37 +97,75 @@ class RouteService {
   static bool get hasRoute => _activePlan != null;
   static void clearRoute() => _activePlan = null;
 
-  // ── Geocoding (Google Geocoding API) ─────────────────────────────────────
+  // ── Place Search (Google Places Autocomplete + Details) ──────────────────
 
+  /// Returns autocomplete predictions with [place_id] but no lat/lng yet.
+  /// Call [getPlaceDetails] to resolve coordinates from a prediction.
   static Future<List<Map<String, dynamic>>> searchPlace(String query) async {
-    if (query.trim().length < 3) return [];
+    if (query.trim().length < 2) return [];
     final url = Uri.https(
       'maps.googleapis.com',
-      '/maps/api/geocode/json',
-      {'address': query, 'key': _kMapsKey},
+      '/maps/api/place/autocomplete/json',
+      {
+        'input': query.trim(),
+        'key': _kMapsKey,
+        'types': 'geocode|establishment',
+        'language': 'en',
+      },
     );
     try {
       final res = await http.get(url).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final data = json.decode(res.body) as Map<String, dynamic>;
         if (data['status'] != 'OK') return [];
-        final results = (data['results'] as List).cast<Map<String, dynamic>>();
-        return results.take(6).map((r) {
-          final loc = r['geometry']['location'] as Map<String, dynamic>;
-          final full = r['formatted_address'] as String;
-          // Build a short label from the first two comma-separated components
-          final parts = full.split(',');
-          final name = parts.take(2).join(',').trim();
+        final predictions =
+            (data['predictions'] as List).cast<Map<String, dynamic>>();
+        return predictions.take(6).map((p) {
+          final desc = p['description'] as String;
           return {
-            'name': name.isNotEmpty ? name : full,
-            'full': full,
-            'lat': (loc['lat'] as num).toDouble(),
-            'lng': (loc['lng'] as num).toDouble(),
+            'name': desc.split(',').first.trim(),
+            'full': desc,
+            'place_id': p['place_id'] as String,
+            'lat': null,
+            'lng': null,
           };
         }).toList();
       }
     } catch (_) {}
     return [];
+  }
+
+  /// Resolves a [placeId] from [searchPlace] into full details with lat/lng.
+  static Future<Map<String, dynamic>?> getPlaceDetails(String placeId) async {
+    final url = Uri.https(
+      'maps.googleapis.com',
+      '/maps/api/place/details/json',
+      {
+        'place_id': placeId,
+        'fields': 'geometry,name,formatted_address',
+        'key': _kMapsKey,
+      },
+    );
+    try {
+      final res = await http.get(url).timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body) as Map<String, dynamic>;
+        if (data['status'] != 'OK') return null;
+        final result = data['result'] as Map<String, dynamic>;
+        final loc = (result['geometry'] as Map<String, dynamic>)['location']
+            as Map<String, dynamic>;
+        final addr = result['formatted_address'] as String? ??
+            result['name'] as String? ??
+            placeId;
+        return {
+          'name': addr.split(',').first.trim(),
+          'full': addr,
+          'lat': (loc['lat'] as num).toDouble(),
+          'lng': (loc['lng'] as num).toDouble(),
+        };
+      }
+    } catch (_) {}
+    return null;
   }
 
   // ── Routing (Google Directions API) ──────────────────────────────────────
